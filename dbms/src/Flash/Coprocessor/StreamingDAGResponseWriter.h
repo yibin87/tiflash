@@ -92,6 +92,7 @@ private:
     WeakHash32 hash;
     IColumn::Selector selector;
     std::vector<IColumn::ScatterColumns> scattered; // size = num_columns
+    const LoggerPtr log;
 
 };
 
