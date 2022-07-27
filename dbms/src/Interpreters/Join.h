@@ -99,6 +99,8 @@ public:
          ASTTableJoin::Kind kind_,
          ASTTableJoin::Strictness strictness_,
          const String & req_id,
+         bool enable_fine_grained_shuffle_ = false,
+         int fine_grained_shuffle_mode_ = 0,
          const TiDB::TiDBCollators & collators_ = TiDB::dummy_collators,
          const String & left_filter_column = "",
          const String & right_filter_column = "",
@@ -120,7 +122,7 @@ public:
     /** Join data from the map (that was previously built by calls to insertFromBlock) to the block with data from "left" table.
       * Could be called from different threads in parallel.
       */
-    void joinBlock(Block & block) const;
+    void joinBlock(size_t stream_id, Block & block) const;
 
     /** Keep "totals" (separate part of dataset, see WITH TOTALS) to use later.
       */
@@ -345,6 +347,8 @@ private:
     mutable std::shared_mutex rwlock;
 
     bool initialized = false;
+    bool enable_fine_grained_shuffle = false;
+    int fine_grained_shuffle_mode = 0;
 
     size_t getBuildConcurrencyInternal() const
     {
@@ -379,7 +383,7 @@ private:
     bool insertFromBlockInternal(Block * stored_block, size_t stream_index);
 
     template <ASTTableJoin::Kind KIND, ASTTableJoin::Strictness STRICTNESS, typename Maps>
-    void joinBlockImpl(Block & block, const Maps & maps) const;
+    void joinBlockImpl(size_t stream_id, Block & block, const Maps & maps) const;
 
     /** Handle non-equal join conditions
       *

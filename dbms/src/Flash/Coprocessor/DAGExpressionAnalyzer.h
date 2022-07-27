@@ -91,6 +91,7 @@ public:
     ExpressionActionsChain::Step & initAndGetLastStep(ExpressionActionsChain & chain) const;
 
     void appendJoin(
+        size_t stream_id,
         ExpressionActionsChain & chain,
         SubqueryForSet & join_query,
         const NamesAndTypesList & columns_added_by_join) const;
