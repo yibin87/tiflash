@@ -165,6 +165,7 @@ Join::Join(
     if (unlikely(!right_filter_column.empty() && !isRightJoin(kind)))
         throw Exception("Not supported: non right join with right conditions");
     LOG_FMT_INFO(log, "FineGrainedShuffle flag {}", enable_fine_grained_shuffle);
+    LOG_FMT_INFO(log, "FineGrainedShuffle flag {}", fine_grained_shuffle_mode);
 }
 
 void Join::setBuildTableState(BuildTableState state_)
@@ -1152,6 +1153,7 @@ void NO_INLINE joinBlockImplTypeCase(
             bool zero_flag = ZeroTraits::check(key);
             if (enable_fine_grained_shuffle)
             {
+                // Only update when both build and prob enables fine-grained shuffle
                 if (fine_grained_shuffle_mode == 2)
                 {
                     segment_index = zero_flag ? map.getSegmentSize() - 1 : stream_id;
@@ -1167,7 +1169,6 @@ void NO_INLINE joinBlockImplTypeCase(
                 }
             }
 
-            //TODO: do according to different fine_grained_shuffle_mode
             if (enable_fine_grained_shuffle && fine_grained_shuffle_mode == 1)
             {
                 size_t segment_size = map.getSegmentSize();

@@ -63,6 +63,7 @@ StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::Stream
     , fine_grained_shuffle_batch_size(fine_grained_shuffle_batch_size_)
     , reuse_scattered_columns_flag(reuse_scattered_columns_flag_)
     , hash(0)
+    , log(Logger::get("StreamingDagResponseWriter"))
 {
     rows_in_blocks = 0;
     partition_num = writer_->getPartitionNum();
@@ -478,6 +479,7 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::b
     if (!blocks.empty())
     {
         initInputBlocks(blocks);
+        LOG_FMT_INFO(log, "reuse_scattered_columns_flag: {}", reuse_scattered_columns_flag);
         if (reuse_scattered_columns_flag)
         {
             if (!inited)
