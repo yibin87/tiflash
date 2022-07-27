@@ -189,7 +189,7 @@ void DAGQueryBlockInterpreter::handleTableScan(const TiDBTableScan & table_scan,
     analyzer = std::move(storage_interpreter.analyzer);
 }
 
-void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline & pipeline, SubqueryForSet & right_query)
+void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline & pipeline, SubqueryForSet & right_query, bool enable_fine_grained_shuffle)
 {
     if (unlikely(input_streams_vec.size() != 2))
     {
@@ -254,6 +254,8 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
         tiflash_join.kind,
         tiflash_join.strictness,
         log->identifier(),
+        (enable_fine_grained_shuffle && context.getSettingsRef().fine_grained_join_mode > 0),
+        context.getSettingsRef().fine_grained_join_mode,
         tiflash_join.join_key_collators,
         probe_filter_column_name,
         build_filter_column_name,
@@ -292,12 +294,11 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
     for (const auto & p : probe_pipeline.firstStream()->getHeader())
         source_columns.emplace_back(p.name, p.type);
     DAGExpressionAnalyzer dag_analyzer(std::move(source_columns), context);
-    ExpressionActionsChain chain;
-    dag_analyzer.appendJoin(chain, right_query, columns_added_by_join);
     pipeline.streams = probe_pipeline.streams;
     /// add join input stream
     if (is_tiflash_right_join)
     {
+        auto & join_execute_info = dagContext().getJoinExecuteInfoMap()[query_block.source_name];
         size_t not_joined_concurrency = join_ptr->getNotJoinedStreamConcurrency();
         for (size_t i = 0; i < not_joined_concurrency; ++i)
         {
@@ -311,10 +312,14 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
             join_execute_info.non_joined_streams.push_back(non_joined_stream);
         }
     }
+    size_t stream_id = 0;
     for (auto & stream : pipeline.streams)
     {
+        ExpressionActionsChain chain;
+        dag_analyzer.appendJoin(stream_id, chain, right_query, columns_added_by_join);
         stream = std::make_shared<HashJoinProbeBlockInputStream>(stream, chain.getLastActions(), log->identifier());
         stream->setExtraInfo(fmt::format("join probe, join_executor_id = {}", query_block.source_name));
+        stream_id++;
     }
 
     /// add a project to remove all the useless column
@@ -582,14 +587,16 @@ void DAGQueryBlockInterpreter::handleWindowOrder(DAGPipeline & pipeline, const t
 //    like final_project.emplace_back(col.name, query_block.qb_column_prefix + col.name);
 void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
 {
-    if (query_block.source->tp() == tipb::ExecType::TypeJoin)
+    auto source_executor = query_block.source;
+    if (source_executor->tp() == tipb::ExecType::TypeJoin)
     {
         SubqueryForSet right_query;
-        handleJoin(query_block.source->join(), pipeline, right_query);
+
+        handleJoin(source_executor->join(), pipeline, right_query, enableFineGrainedShuffle(source_executor->fine_grained_shuffle_stream_count()));
         recordProfileStreams(pipeline, query_block.source_name);
         dagContext().addSubquery(query_block.source_name, std::move(right_query));
     }
-    else if (query_block.source->tp() == tipb::ExecType::TypeExchangeReceiver)
+    else if (source_executor->tp() == tipb::ExecType::TypeExchangeReceiver)
     {
         if (unlikely(context.isExecutorTest()))
             handleMockExchangeReceiver(pipeline);
@@ -601,7 +608,7 @@ void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
         }
         recordProfileStreams(pipeline, query_block.source_name);
     }
-    else if (query_block.source->tp() == tipb::ExecType::TypeProjection)
+    else if (source_executor->tp() == tipb::ExecType::TypeProjection)
     {
         handleProjection(pipeline, query_block.source->projection());
         recordProfileStreams(pipeline, query_block.source_name);
@@ -615,15 +622,15 @@ void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
             handleTableScan(table_scan, pipeline);
         dagContext().table_scan_executor_id = query_block.source_name;
     }
-    else if (query_block.source->tp() == tipb::ExecType::TypeWindow)
+    else if (source_executor->tp() == tipb::ExecType::TypeWindow)
     {
-        handleWindow(pipeline, query_block.source->window(), enableFineGrainedShuffle(query_block.source->fine_grained_shuffle_stream_count()));
+        handleWindow(pipeline, query_block.source->window(), enableFineGrainedShuffle(source_executor->fine_grained_shuffle_stream_count()));
         recordProfileStreams(pipeline, query_block.source_name);
         restorePipelineConcurrency(pipeline);
     }
-    else if (query_block.source->tp() == tipb::ExecType::TypeSort)
+    else if (source_executor->tp() == tipb::ExecType::TypeSort)
     {
-        handleWindowOrder(pipeline, query_block.source->sort(), enableFineGrainedShuffle(query_block.source->fine_grained_shuffle_stream_count()));
+        handleWindowOrder(pipeline, query_block.source->sort(), enableFineGrainedShuffle(source_executor->fine_grained_shuffle_stream_count()));
         recordProfileStreams(pipeline, query_block.source_name);
     }
     else
@@ -750,7 +757,8 @@ void DAGQueryBlockInterpreter::handleExchangeSender(DAGPipeline & pipeline)
                 stream_id++ == 0, /// only one stream needs to sending execution summaries for the last response
                 dagContext(),
                 stream_count,
-                batch_size);
+                batch_size,
+                context.getSettingsRef().enable_scatter_memory_reuse);
             stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
             stream->setExtraInfo(String(enableFineGrainedShuffleExtraInfo));
         });
@@ -770,7 +778,8 @@ void DAGQueryBlockInterpreter::handleExchangeSender(DAGPipeline & pipeline)
                 stream_id++ == 0, /// only one stream needs to sending execution summaries for the last response
                 dagContext(),
                 stream_count,
-                batch_size);
+                batch_size,
+                context.getSettingsRef().enable_scatter_memory_reuse);
             stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
         });
     }
