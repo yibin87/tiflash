@@ -87,6 +87,7 @@ struct AnalysisResult
     TiDB::TiDBCollators aggregation_collators;
     AggregateDescriptions aggregate_descriptions;
     bool is_final_agg = false;
+    bool enable_fine_grained_shuffle = false;
 };
 
 AnalysisResult analyzeExpressions(
@@ -112,6 +113,7 @@ AnalysisResult analyzeExpressions(
     if (query_block.aggregation)
     {
         res.is_final_agg = AggregationInterpreterHelper::isFinalAgg(query_block.aggregation->aggregation());
+        res.enable_fine_grained_shuffle = enableFineGrainedShuffle(query_block.aggregation->fine_grained_shuffle_stream_count());
 
         std::tie(res.aggregation_keys, res.aggregation_collators, res.aggregate_descriptions, res.before_aggregation) = analyzer.appendAggregation(
             chain,
@@ -301,16 +303,38 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
 
         auto & join_execute_info = dagContext().getJoinExecuteInfoMap()[query_block.source_name];
         size_t not_joined_concurrency = join_ptr->getNotJoinedStreamConcurrency();
-        for (size_t i = 0; i < not_joined_concurrency; ++i)
-        {
-            auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
-                pipeline.firstStream()->getHeader(),
-                i,
-                not_joined_concurrency,
-                settings.max_block_size);
-            non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
-            pipeline.streams_with_non_joined_data.push_back(non_joined_stream);
-            join_execute_info.non_joined_streams.push_back(non_joined_stream);
+
+        if (enable_fine_grained_shuffle && context.getSettingsRef().fine_grained_join_mode == 2 && context.getSettingsRef().enable_concat_non_joined_stream_with_probe_stream) {
+            assert(not_joined_concurrency == join_ptr->getBuildConcurrency());
+            assert(not_joined_concurrency == probe_pipeline.streams.size());
+            for (size_t i = 0; i < not_joined_concurrency; ++i)
+            {
+                auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
+                    pipeline.firstStream()->getHeader(),
+                    i,
+                    not_joined_concurrency,
+                    settings.max_block_size);
+                non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
+                BlockInputStreams stream_vec;
+                stream_vec.push_back(pipeline.streams[i]);
+                stream_vec.push_back(non_joined_stream);
+                pipeline.streams[i] = std::make_shared<ConcatBlockInputStream>(stream_vec, "Concat Prob and Non-joined streams");
+                pipeline.streams[i]->setExtraInfo("add stream which concats prob stream and non_joined_stream");
+            }
+        }
+        else {
+            for (size_t i = 0; i < not_joined_concurrency; ++i)
+            {
+                auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
+                    pipeline.firstStream()->getHeader(),
+                    i,
+                    not_joined_concurrency,
+                    settings.max_block_size);
+                non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
+
+                pipeline.streams_with_non_joined_data.push_back(non_joined_stream);
+                join_execute_info.non_joined_streams.push_back(non_joined_stream);
+            }
         }
     }
     size_t stream_id = 0;
@@ -383,7 +407,8 @@ void DAGQueryBlockInterpreter::executeAggregation(
     const Names & key_names,
     const TiDB::TiDBCollators & collators,
     AggregateDescriptions & aggregate_descriptions,
-    bool is_final_agg)
+    bool is_final_agg,
+    bool enable_fine_grained_shuffle)
 {
     executeExpression(pipeline, expression_actions_ptr, log, "before aggregation");
 
@@ -400,7 +425,21 @@ void DAGQueryBlockInterpreter::executeAggregation(
         is_final_agg);
 
     /// If there are several sources, then we perform parallel aggregation
-    if (pipeline.streams.size() > 1 || pipeline.streams_with_non_joined_data.size() > 1)
+    if (enable_fine_grained_shuffle && context.getSettingsRef().enable_fine_grained_agg)
+    {
+        LOG_FMT_INFO(log, "Apply FineGrainedShuffle optimization for aggregation!");
+        RUNTIME_ASSERT(pipeline.streams_with_non_joined_data.size() == 0, log, "NonJoinedStream count: {}", pipeline.streams_with_non_joined_data.size());
+        pipeline.transform([&](auto & stream) {
+            stream = std::make_shared<AggregatingBlockInputStream>(
+                stream,
+                params,
+                context.getFileProvider(),
+                true,
+                log->identifier());
+        });
+        recordProfileStreams(pipeline, query_block.aggregation_name);
+    }
+    else if (pipeline.streams.size() > 1 || pipeline.streams_with_non_joined_data.size() > 1)
     {
         const Settings & settings = context.getSettingsRef();
         BlockInputStreamPtr stream = std::make_shared<ParallelAggregatingBlockInputStream>(
@@ -661,7 +700,7 @@ void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
     if (res.before_aggregation)
     {
         // execute aggregation
-        executeAggregation(pipeline, res.before_aggregation, res.aggregation_keys, res.aggregation_collators, res.aggregate_descriptions, res.is_final_agg);
+        executeAggregation(pipeline, res.before_aggregation, res.aggregation_keys, res.aggregation_collators, res.aggregate_descriptions, res.is_final_agg, res.enable_fine_grained_shuffle);
     }
     if (res.before_having)
     {
