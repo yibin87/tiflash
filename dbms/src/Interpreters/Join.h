@@ -100,7 +100,7 @@ public:
          ASTTableJoin::Strictness strictness_,
          const String & req_id,
          bool enable_fine_grained_shuffle_ = false,
-         int fine_grained_shuffle_mode_ = 0,
+         UInt64 fine_grained_shuffle_mode_ = 0,
          const TiDB::TiDBCollators & collators_ = TiDB::dummy_collators,
          const String & left_filter_column = "",
          const String & right_filter_column = "",
@@ -351,7 +351,7 @@ private:
 
     bool initialized = false;
     bool enable_fine_grained_shuffle = false;
-    int fine_grained_shuffle_mode = 0;
+    UInt64 fine_grained_shuffle_mode = 0;
 
     size_t getBuildConcurrencyInternal() const
     {

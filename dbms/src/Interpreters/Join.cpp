@@ -121,7 +121,7 @@ Join::Join(
     ASTTableJoin::Strictness strictness_,
     const String & req_id,
     bool enable_fine_grained_shuffle_,
-    int fine_grained_shuffle_mode_,
+    UInt64 fine_grained_shuffle_mode_,
     const TiDB::TiDBCollators & collators_,
     const String & left_filter_column_,
     const String & right_filter_column_,
@@ -237,9 +237,6 @@ Join::Type Join::chooseMethod(const ColumnRawPtrs & key_columns, Sizes & key_siz
 template <typename Maps>
 static void initImpl(Maps & maps, Join::Type type, size_t build_concurrency)
 {
-    // +1 for zero keys
-    build_concurrency += 1;
-
     switch (type)
     {
     case Join::Type::EMPTY:
@@ -612,16 +609,9 @@ void NO_INLINE insertFromBlockImplTypeCaseWithLock(
                 continue;
             }
 
-            // TODO: what does ZeroTraits do?
             auto key_holder = key_getter.getKeyHolder(i, &pool, sort_key_containers);
-            auto key = keyHolderGetKey(key_holder);
-            bool is_zero = ZeroTraits::check(key);
-            size_t segment_index = is_zero ? map.getSegmentSize() - 1 : stream_index;
+            size_t segment_index = stream_index;
             keyHolderDiscardKey(key_holder);
-
-            std::unique_lock lock(map.getSegmentMutex(segment_index), std::defer_lock);
-            if (is_zero)
-                lock.lock();
 
             Inserter<STRICTNESS, typename Map::SegmentType::HashTable, KeyGetter>::insert(
                 map.getSegmentTable(segment_index),
@@ -1150,18 +1140,18 @@ void NO_INLINE joinBlockImplTypeCase(
             auto key_holder = key_getter.getKeyHolder(i, &pool, sort_key_containers);
             auto key = keyHolderGetKey(key_holder);
             size_t segment_index = 0;
-            bool zero_flag = ZeroTraits::check(key);
             if (enable_fine_grained_shuffle)
             {
                 // Only update when both build and prob enables fine-grained shuffle
                 if (fine_grained_shuffle_mode == 2)
                 {
-                    segment_index = zero_flag ? map.getSegmentSize() - 1 : stream_id;
+                    segment_index = stream_id;
                 }
             }
             else
             {
                 size_t hash_value = 0;
+                bool zero_flag = ZeroTraits::check(key);
                 if (map.getSegmentSize() > 0 && !zero_flag)
                 {
                     hash_value = map.hash(key);
@@ -1636,7 +1626,7 @@ void Join::joinBlockImpl(size_t stream_id, Block & block, const Maps & maps) con
             right_indexes,                                                                                                                     \
             collators,                                                                                                                         \
             enable_fine_grained_shuffle,                                                                                                       \
-            fine_grained_shuffle_mode);                                                                                                      \
+            fine_grained_shuffle_mode);                                                                                                        \
         break;
         APPLY_FOR_JOIN_VARIANTS(M)
 #undef M
