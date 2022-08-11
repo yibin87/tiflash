@@ -54,7 +54,8 @@ else
   BUILD_DIR="$SRCPATH/release-centos7-llvm/build-debug"
   ENABLE_FAILPOINTS="ON"
 fi
-rm -rf ${BUILD_DIR} && mkdir -p ${BUILD_DIR} && cd ${BUILD_DIR}
+#rm -rf ${BUILD_DIR} && mkdir -p ${BUILD_DIR} && cd ${BUILD_DIR}
+cd ${BUILD_DIR}
 
 cmake -S "${SRCPATH}" \
   ${DEFINE_CMAKE_PREFIX_PATH} \

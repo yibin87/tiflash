@@ -38,6 +38,7 @@
 #include <Flash/Coprocessor/DAGQueryBlockInterpreter.h>
 #include <Flash/Coprocessor/DAGUtils.h>
 #include <Flash/Coprocessor/ExchangeSenderInterpreterHelper.h>
+#include <Flash/Coprocessor/FineGrainedShuffle.h>
 #include <Flash/Coprocessor/GenSchemaAndColumn.h>
 #include <Flash/Coprocessor/InterpreterUtils.h>
 #include <Flash/Coprocessor/JoinInterpreterHelper.h>
@@ -100,7 +101,7 @@ AnalysisResult analyzeExpressions(
     ExpressionActionsChain chain;
     // selection on table scan had been executed in handleTableScan
     // In test mode, filter is not pushed down to table scan
-    if (query_block.selection && (!query_block.isTableScanSource() || context.getDAGContext()->isTest()))
+    if (query_block.selection && (!query_block.isTableScanSource() || context.isTest()))
     {
         std::vector<const tipb::Expr *> where_conditions;
         for (const auto & c : query_block.selection->selection().conditions())
@@ -161,9 +162,9 @@ AnalysisResult analyzeExpressions(
 // for tests, we need to mock tableScan blockInputStream as the source stream.
 void DAGQueryBlockInterpreter::handleMockTableScan(const TiDBTableScan & table_scan, DAGPipeline & pipeline)
 {
-    if (context.getDAGContext()->columnsForTestEmpty() || context.getDAGContext()->columnsForTest(table_scan.getTableScanExecutorID()).empty())
+    if (context.columnsForTestEmpty() || context.columnsForTest(table_scan.getTableScanExecutorID()).empty())
     {
-        auto names_and_types = genNamesAndTypes(table_scan);
+        auto names_and_types = genNamesAndTypes(table_scan, "mock_table_scan");
         auto columns_with_type_and_name = getColumnWithTypeAndName(names_and_types);
         analyzer = std::make_unique<DAGExpressionAnalyzer>(std::move(names_and_types), context);
         for (size_t i = 0; i < max_streams; ++i)
@@ -182,7 +183,7 @@ void DAGQueryBlockInterpreter::handleMockTableScan(const TiDBTableScan & table_s
 
 void DAGQueryBlockInterpreter::handleTableScan(const TiDBTableScan & table_scan, DAGPipeline & pipeline)
 {
-    const auto push_down_filter = PushDownFilter::toPushDownFilter(query_block.selection_name, query_block.selection);
+    const auto push_down_filter = PushDownFilter::pushDownFilterFrom(query_block.selection_name, query_block.selection);
 
     DAGStorageInterpreter storage_interpreter(context, table_scan, push_down_filter, max_streams);
     storage_interpreter.execute(pipeline);
@@ -247,6 +248,7 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
     size_t max_block_size_for_cross_join = settings.max_block_size;
     fiu_do_on(FailPoints::minimum_block_size_for_cross_join, { max_block_size_for_cross_join = 1; });
 
+    LOG_FMT_INFO(log, "HANDLEJOIN mode: {}, enable_fine_grained_shuffle_flag: {}", context.getSettingsRef().fine_grained_join_mode, enable_fine_grained_shuffle);
     JoinPtr join_ptr = std::make_shared<Join>(
         probe_key_names,
         build_key_names,
@@ -268,6 +270,8 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
 
     recordJoinExecuteInfo(tiflash_join.build_side_index, join_ptr);
 
+    auto & join_execute_info = dagContext().getJoinExecuteInfoMap()[query_block.source_name];
+
     size_t join_build_concurrency = settings.join_concurrent_build ? std::min(max_streams, build_pipeline.streams.size()) : 1;
 
     /// build side streams
@@ -278,9 +282,10 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
         stream = std::make_shared<HashJoinBuildBlockInputStream>(stream, join_ptr, get_concurrency_build_index(), log->identifier());
         stream->setExtraInfo(
             fmt::format("join build, build_side_root_executor_id = {}", dagContext().getJoinExecuteInfoMap()[query_block.source_name].build_side_root_executor_id));
+        join_execute_info.join_build_streams.push_back(stream);
     });
     // for test, join executor need the return blocks to output.
-    executeUnion(build_pipeline, max_streams, log, /*ignore_block=*/!dagContext().isTest(), "for join");
+    executeUnion(build_pipeline, max_streams, log, /*ignore_block=*/!context.isTest(), "for join");
 
     right_query.source = build_pipeline.firstStream();
     right_query.join = join_ptr;
@@ -293,50 +298,26 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
         source_columns.emplace_back(p.name, p.type);
     DAGExpressionAnalyzer dag_analyzer(std::move(source_columns), context);
     pipeline.streams = probe_pipeline.streams;
+    const auto & left_header = pipeline.firstStream()->getHeader();
     /// add join input stream
     if (is_tiflash_right_join)
     {
-        // Give it an expression chain instance, but createStreamWithNonJoinedDataIfFullOrRightJoin only needs to
-        // know the type of join...
-        ExpressionActionsChain chain;
-        dag_analyzer.appendJoin(0, chain, right_query, columns_added_by_join);
-
-        auto & join_execute_info = dagContext().getJoinExecuteInfoMap()[query_block.source_name];
+    	LOG_FMT_INFO(log, "TiFlash RIGHTJOIN");
         size_t not_joined_concurrency = join_ptr->getNotJoinedStreamConcurrency();
+        for (size_t i = 0; i < not_joined_concurrency; ++i)
+        {
+            auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
+                left_header,
+                i,
+                not_joined_concurrency,
+                settings.max_block_size);
+            non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
 
-        if (enable_fine_grained_shuffle && context.getSettingsRef().fine_grained_join_mode == 2 && context.getSettingsRef().enable_concat_non_joined_stream_with_probe_stream) {
-            assert(not_joined_concurrency == join_ptr->getBuildConcurrency());
-            assert(not_joined_concurrency == probe_pipeline.streams.size());
-            for (size_t i = 0; i < not_joined_concurrency; ++i)
-            {
-                auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
-                    pipeline.firstStream()->getHeader(),
-                    i,
-                    not_joined_concurrency,
-                    settings.max_block_size);
-                non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
-                BlockInputStreams stream_vec;
-                stream_vec.push_back(pipeline.streams[i]);
-                stream_vec.push_back(non_joined_stream);
-                pipeline.streams[i] = std::make_shared<ConcatBlockInputStream>(stream_vec, "Concat Prob and Non-joined streams");
-                pipeline.streams[i]->setExtraInfo("add stream which concats prob stream and non_joined_stream");
-            }
-        }
-        else {
-            for (size_t i = 0; i < not_joined_concurrency; ++i)
-            {
-                auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
-                    pipeline.firstStream()->getHeader(),
-                    i,
-                    not_joined_concurrency,
-                    settings.max_block_size);
-                non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
-
-                pipeline.streams_with_non_joined_data.push_back(non_joined_stream);
-                join_execute_info.non_joined_streams.push_back(non_joined_stream);
-            }
+            pipeline.streams_with_non_joined_data.push_back(non_joined_stream);
+            join_execute_info.non_joined_streams.push_back(non_joined_stream);
         }
     }
+
     size_t stream_id = 0;
     for (auto & stream : pipeline.streams)
     {
@@ -356,6 +337,27 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
         project_cols.emplace_back(c.name, c.name);
     }
     executeProject(pipeline, project_cols, "remove useless column after join");
+
+    if (is_tiflash_right_join)
+    {
+        size_t not_joined_concurrency = join_ptr->getNotJoinedStreamConcurrency();
+        if (enable_fine_grained_shuffle && context.getSettingsRef().fine_grained_join_mode == 2 && context.getSettingsRef().enable_concat_non_joined_stream_with_probe_stream) {
+            assert(not_joined_concurrency == join_ptr->getBuildConcurrency());
+            assert(not_joined_concurrency == probe_pipeline.streams.size());
+            assert(pipeline.streams_with_non_joined_data.size() >= probe_pipeline.streams.size());
+            assert(pipeline.streams_with_non_joined_data.size() >= probe_pipeline.streams.size());
+            assert(join_execute_info.non_joined_streams.size() >= probe_pipeline.streams.size());
+            for (size_t i = 0; i < not_joined_concurrency; ++i)
+            {
+                BlockInputStreams inputs;
+		        inputs.push_back(pipeline.streams.at(i));
+                inputs.push_back(pipeline.streams_with_non_joined_data.back());
+                pipeline.streams_with_non_joined_data.pop_back();
+                join_execute_info.non_joined_streams.pop_back();
+                pipeline.streams.at(i) = std::make_shared<ConcatBlockInputStream>(inputs, "Concat Prob and Non-joined streams");
+            }
+        }
+    }
     analyzer = std::make_unique<DAGExpressionAnalyzer>(std::move(join_output_columns), context);
 }
 
@@ -389,7 +391,7 @@ void DAGQueryBlockInterpreter::executeWindow(
         /// Window function can be multiple threaded when fine grained shuffle is enabled.
         pipeline.transform([&](auto & stream) {
             stream = std::make_shared<WindowBlockInputStream>(stream, window_description, log->identifier());
-            stream->setExtraInfo(enableFineGrainedShuffleExtraInfo);
+            stream->setExtraInfo(String(enableFineGrainedShuffleExtraInfo));
         });
     }
     else
@@ -512,7 +514,7 @@ void DAGQueryBlockInterpreter::handleExchangeReceiver(DAGPipeline & pipeline)
     size_t stream_count = max_streams;
     if (enable_fine_grained_shuffle)
     {
-        extra_info += ", " + enableFineGrainedShuffleExtraInfo;
+        extra_info += ", " + String(enableFineGrainedShuffleExtraInfo);
         stream_count = std::min(max_streams, exchange_receiver->getFineGrainedShuffleStreamCount());
     }
 
@@ -538,7 +540,7 @@ void DAGQueryBlockInterpreter::handleExchangeReceiver(DAGPipeline & pipeline)
 // for tests, we need to mock ExchangeReceiver blockInputStream as the source stream.
 void DAGQueryBlockInterpreter::handleMockExchangeReceiver(DAGPipeline & pipeline)
 {
-    if (context.getDAGContext()->columnsForTestEmpty() || context.getDAGContext()->columnsForTest(query_block.source_name).empty())
+    if (context.columnsForTestEmpty() || context.columnsForTest(query_block.source_name).empty())
     {
         for (size_t i = 0; i < max_streams; ++i)
         {
@@ -631,17 +633,21 @@ void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
     if (source_executor->tp() == tipb::ExecType::TypeJoin)
     {
         SubqueryForSet right_query;
-
+	    LOG_FMT_INFO(log, "JOIN stream count: {}", source_executor->fine_grained_shuffle_stream_count());
         handleJoin(source_executor->join(), pipeline, right_query, enableFineGrainedShuffle(source_executor->fine_grained_shuffle_stream_count()));
         recordProfileStreams(pipeline, query_block.source_name);
         dagContext().addSubquery(query_block.source_name, std::move(right_query));
     }
     else if (source_executor->tp() == tipb::ExecType::TypeExchangeReceiver)
     {
-        if (unlikely(dagContext().isTest()))
+        if (unlikely(context.isExecutorTest()))
             handleMockExchangeReceiver(pipeline);
         else
+        {
+            // for MPP test, we can use real exchangeReceiver to run an query across different compute nodes
+            // or use one compute node to simulate MPP process.
             handleExchangeReceiver(pipeline);
+        }
         recordProfileStreams(pipeline, query_block.source_name);
     }
     else if (source_executor->tp() == tipb::ExecType::TypeProjection)
@@ -652,7 +658,7 @@ void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
     else if (query_block.isTableScanSource())
     {
         TiDBTableScan table_scan(query_block.source, query_block.source_name, dagContext());
-        if (unlikely(dagContext().isTest()))
+        if (unlikely(context.isTest()))
             handleMockTableScan(table_scan, pipeline);
         else
             handleTableScan(table_scan, pipeline);
@@ -695,7 +701,7 @@ void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
         "execution stream size for query block(before aggregation) {} is {}",
         query_block.qb_column_prefix,
         pipeline.streams.size());
-    dagContext().final_concurrency = std::min(std::max(dagContext().final_concurrency, pipeline.streams.size()), max_streams);
+    dagContext().updateFinalConcurrency(pipeline.streams.size(), max_streams);
 
     if (res.before_aggregation)
     {
@@ -733,10 +739,14 @@ void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
     // execute exchange_sender
     if (query_block.exchange_sender)
     {
-        if (unlikely(dagContext().isTest()))
+        if (unlikely(context.isExecutorTest()))
             handleMockExchangeSender(pipeline);
         else
+        {
+            // for MPP test, we can use real exchangeReceiver to run an query across different compute nodes
+            // or use one compute node to simulate MPP process.
             handleExchangeSender(pipeline);
+        }
         recordProfileStreams(pipeline, query_block.exchange_sender_name);
     }
 }
@@ -792,10 +802,10 @@ void DAGQueryBlockInterpreter::handleExchangeSender(DAGPipeline & pipeline)
                 batch_size,
                 context.getSettingsRef().enable_scatter_memory_reuse);
             stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
-            stream->setExtraInfo(enableFineGrainedShuffleExtraInfo);
+            stream->setExtraInfo(String(enableFineGrainedShuffleExtraInfo));
         });
-        RUNTIME_CHECK(exchange_sender.tp() == tipb::ExchangeType::Hash, Exception, "exchange_sender has to be hash partition when fine grained shuffle is enabled");
-        RUNTIME_CHECK(stream_count <= 1024, Exception, "fine_grained_shuffle_stream_count should not be greater than 1024");
+        RUNTIME_CHECK(exchange_sender.tp() == tipb::ExchangeType::Hash, Exception("exchange_sender has to be hash partition when fine grained shuffle is enabled"));
+        RUNTIME_CHECK(stream_count <= 1024, Exception("fine_grained_shuffle_stream_count should not be greater than 1024"));
     }
     else
     {
