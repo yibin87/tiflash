@@ -248,6 +248,7 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
     size_t max_block_size_for_cross_join = settings.max_block_size;
     fiu_do_on(FailPoints::minimum_block_size_for_cross_join, { max_block_size_for_cross_join = 1; });
 
+    LOG_FMT_INFO(log, "HANDLEJOIN mode: {}, enable_fine_grained_shuffle_flag: {}", context.getSettingsRef().fine_grained_join_mode, enable_fine_grained_shuffle);
     JoinPtr join_ptr = std::make_shared<Join>(
         probe_key_names,
         build_key_names,
@@ -297,45 +298,27 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
         source_columns.emplace_back(p.name, p.type);
     DAGExpressionAnalyzer dag_analyzer(std::move(source_columns), context);
     pipeline.streams = probe_pipeline.streams;
+    const auto & left_header = pipeline.firstStream()->getHeader();
     /// add join input stream
     if (is_tiflash_right_join)
     {
-        auto & join_execute_info = dagContext().getJoinExecuteInfoMap()[query_block.source_name];
+    	LOG_FMT_INFO(log, "TiFlash RIGHTJOIN");
+    	auto & join_execute_info = dagContext().getJoinExecuteInfoMap()[query_block.source_name];
         size_t not_joined_concurrency = join_ptr->getNotJoinedStreamConcurrency();
+        for (size_t i = 0; i < not_joined_concurrency; ++i)
+        {
+            auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
+                left_header,
+                i,
+                not_joined_concurrency,
+                settings.max_block_size);
+            non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
 
-        if (enable_fine_grained_shuffle && context.getSettingsRef().fine_grained_join_mode == 2 && context.getSettingsRef().enable_concat_non_joined_stream_with_probe_stream) {
-            assert(not_joined_concurrency == join_ptr->getBuildConcurrency());
-            assert(not_joined_concurrency == probe_pipeline.streams.size());
-            for (size_t i = 0; i < not_joined_concurrency; ++i)
-            {
-                auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
-                    pipeline.firstStream()->getHeader(),
-                    i,
-                    not_joined_concurrency,
-                    settings.max_block_size);
-                non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
-                BlockInputStreams stream_vec;
-                stream_vec.push_back(pipeline.streams[i]);
-                stream_vec.push_back(non_joined_stream);
-                pipeline.streams[i] = std::make_shared<ConcatBlockInputStream>(stream_vec, "Concat Prob and Non-joined streams");
-                pipeline.streams[i]->setExtraInfo("add stream which concats prob stream and non_joined_stream");
-            }
-        }
-        else {
-            for (size_t i = 0; i < not_joined_concurrency; ++i)
-            {
-                auto non_joined_stream = join_ptr->createStreamWithNonJoinedRows(
-                    pipeline.firstStream()->getHeader(),
-                    i,
-                    not_joined_concurrency,
-                    settings.max_block_size);
-                non_joined_stream->setExtraInfo("add stream with non_joined_data if full_or_right_join");
-
-                pipeline.streams_with_non_joined_data.push_back(non_joined_stream);
-                join_execute_info.non_joined_streams.push_back(non_joined_stream);
-            }
+            pipeline.streams_with_non_joined_data.push_back(non_joined_stream);
+            join_execute_info.non_joined_streams.push_back(non_joined_stream);
         }
     }
+
     size_t stream_id = 0;
     for (auto & stream : pipeline.streams)
     {
@@ -355,6 +338,22 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
         project_cols.emplace_back(c.name, c.name);
     }
     executeProject(pipeline, project_cols, "remove useless column after join");
+
+    if (is_tiflash_right_join)
+    {
+        size_t not_joined_concurrency = join_ptr->getNotJoinedStreamConcurrency();
+        if (enable_fine_grained_shuffle && context.getSettingsRef().fine_grained_join_mode == 2 && context.getSettingsRef().enable_concat_non_joined_stream_with_probe_stream) {
+            assert(not_joined_concurrency == join_ptr->getBuildConcurrency());
+            assert(not_joined_concurrency == probe_pipeline.streams.size());
+            for (size_t i = 0; i < not_joined_concurrency; ++i)
+            {
+                BlockInputStreams inputs;
+		inputs.push_back(pipeline.streams.at(i));
+                inputs.push_back(pipeline.streams_with_non_joined_data.at(i));
+                pipeline.streams.at(i) = std::make_shared<ConcatBlockInputStream>(inputs, "Concat Prob and Non-joined streams");
+            }
+        }
+    }
     analyzer = std::make_unique<DAGExpressionAnalyzer>(std::move(join_output_columns), context);
 }
 
@@ -630,7 +629,7 @@ void DAGQueryBlockInterpreter::executeImpl(DAGPipeline & pipeline)
     if (source_executor->tp() == tipb::ExecType::TypeJoin)
     {
         SubqueryForSet right_query;
-
+	LOG_FMT_INFO(log, "JOIN stream count: {}", source_executor->fine_grained_shuffle_stream_count());
         handleJoin(source_executor->join(), pipeline, right_query, enableFineGrainedShuffle(source_executor->fine_grained_shuffle_stream_count()));
         recordProfileStreams(pipeline, query_block.source_name);
         dagContext().addSubquery(query_block.source_name, std::move(right_query));
