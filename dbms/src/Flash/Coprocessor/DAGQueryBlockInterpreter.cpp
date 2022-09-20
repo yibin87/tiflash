@@ -752,7 +752,8 @@ void DAGQueryBlockInterpreter::handleExchangeSender(DAGPipeline & pipeline)
                 stream_id++ == 0, /// only one stream needs to sending execution summaries for the last response
                 dagContext(),
                 stream_count,
-                batch_size);
+                batch_size,
+		context.getSettingsRef().enable_scatter_memory_reuse);
             stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
             stream->setExtraInfo(String(enableFineGrainedShuffleExtraInfo));
         });
@@ -772,7 +773,8 @@ void DAGQueryBlockInterpreter::handleExchangeSender(DAGPipeline & pipeline)
                 stream_id++ == 0, /// only one stream needs to sending execution summaries for the last response
                 dagContext(),
                 stream_count,
-                batch_size);
+                batch_size,
+		false);
             stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
         });
     }

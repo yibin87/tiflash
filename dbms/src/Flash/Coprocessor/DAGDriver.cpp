@@ -138,7 +138,8 @@ try
             true,
             dag_context,
             /*fine_grained_shuffle_stream_count=*/0,
-            /*fine_grained_shuffle_batch_size=*/0);
+            /*fine_grained_shuffle_batch_size=*/0,
+	    false);
         dag_output_stream = std::make_shared<DAGBlockOutputStream>(streams.in->getHeader(), std::move(response_writer));
         copyData(*streams.in, *dag_output_stream);
     }

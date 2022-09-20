@@ -45,10 +45,11 @@ public:
         tipb::ExchangeType exchange_type_,
         Int64 records_per_chunk_,
         Int64 batch_send_min_limit_,
-        bool should_send_exec_summary_at_last,
+        bool should_send_exec_summary_at_last_,
         DAGContext & dag_context_,
         UInt64 fine_grained_shuffle_stream_count_,
-        UInt64 fine_grained_shuffle_batch_size);
+        UInt64 fine_grained_shuffle_batch_size_,
+	bool reuse_scattered_columns_flag_);
     void write(const Block & block) override;
     void finishWrite() override;
 
@@ -70,6 +71,8 @@ private:
     template <bool send_exec_summary_at_last>
     void writePackets(const std::vector<size_t> & responses_row_count, std::vector<TrackedMppDataPacket> & packets) const;
 
+    void resetScatterColumns();
+
     Int64 batch_send_min_limit;
     bool should_send_exec_summary_at_last; /// only one stream needs to sending execution summaries at last.
     tipb::ExchangeType exchange_type;
@@ -82,6 +85,14 @@ private:
     std::unique_ptr<ChunkCodecStream> chunk_codec_stream;
     UInt64 fine_grained_shuffle_stream_count;
     UInt64 fine_grained_shuffle_batch_size;
+    bool reuse_scattered_columns_flag = false;
+    bool inited = false;
+    Block header;
+    size_t num_columns, num_bucket;
+    std::vector<String> partition_key_containers_for_reuse;
+    WeakHash32 hash;
+    IColumn::Selector selector;
+    std::vector<IColumn::ScatterColumns> scattered; // size = num_columns
 };
 
 } // namespace DB
