@@ -161,7 +161,7 @@ void PhysicalPlan::build(const String & executor_id, const tipb::Executor * exec
         buildFinalProjection(fmt::format("{}_l_", executor_id), false);
         auto left = popBack();
 
-        pushBack(PhysicalJoin::build(context, executor_id, log, executor->join(), left, right));
+        pushBack(PhysicalJoin::build(context, executor_id, log, executor->join(), left, right, FineGrainedShuffle(executor)));
         break;
     }
     default:
