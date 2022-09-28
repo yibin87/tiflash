@@ -49,8 +49,9 @@ public:
         DAGContext & dag_context_,
         UInt64 fine_grained_shuffle_stream_count_,
         UInt64 fine_grained_shuffle_batch_size_,
-	bool reuse_scattered_columns_flag_);
-    void write(const Block & block) override;
+	bool reuse_scattered_columns_flag_,
+	const String & req_id = "");
+    void write(const Block & block, bool finish) override;
     void finishWrite() override;
 
 private:
@@ -93,6 +94,11 @@ private:
     WeakHash32 hash;
     IColumn::Selector selector;
     std::vector<IColumn::ScatterColumns> scattered; // size = num_columns
+    const LoggerPtr log;
+    size_t cached_block_count = 0;
+    bool first_block = true;
+    bool first_packet = true;
+    size_t total_blocks = 0;
 };
 
 } // namespace DB

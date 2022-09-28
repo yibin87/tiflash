@@ -132,6 +132,13 @@ struct TrackedMppDataPacket
         packet.add_chunks(std::move(value));
     }
 
+    void addChunk(std::string && value, size_t & value_size)
+    {
+	value_size = value.size();
+        mem_tracker_wrapper.alloc(value.size());
+        packet.add_chunks(std::move(value));
+    }
+
     void serializeByResponse(const tipb::SelectResponse & response)
     {
         mem_tracker_wrapper.alloc(response.ByteSizeLong());

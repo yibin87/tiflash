@@ -344,6 +344,7 @@ private:
             err_msg = std::move(msg);
         }
         stage = AsyncRequestStage::FINISHED;
+	LOG_FMT_INFO(log, "SetDone push cost {}", push_cost);
     }
 
     void start()
@@ -368,6 +369,8 @@ private:
 
     bool sendPackets(std::string & err_info)
     {
+        LOG_FMT_INFO(log, "PushingPackets. {}", read_packet_index);
+	size_t start_ns = clock_gettime_ns();
         // note: no exception should be thrown rudely, since it's called by a GRPC poller.
         for (size_t i = 0; i < read_packet_index; ++i)
         {
@@ -392,6 +395,7 @@ private:
             // can't reuse packet since it is sent to readers.
             packet = std::make_shared<TrackedMppDataPacket>();
         }
+	push_cost += (clock_gettime_ns() - start_ns);
         return true;
     }
 
@@ -420,6 +424,7 @@ private:
     Status finish_status = RPCContext::getStatusOK();
     LoggerPtr log;
     std::mutex mu;
+    size_t push_cost = 0;
 };
 } // namespace
 
@@ -729,7 +734,7 @@ DecodeDetail ExchangeReceiverBase<RPCContext>::decodeChunks(
 }
 
 template <typename RPCContext>
-ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<Block> & block_queue, const Block & header, size_t stream_id)
+ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<Block> & block_queue, const Block & header, size_t stream_id, size_t & decode_cost)
 {
     if (unlikely(stream_id >= msg_channels.size()))
     {
@@ -750,6 +755,11 @@ ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<B
             return ExchangeReceiverResult::newEOF(name);
         }
     }
+    if (decode_cost == 0)
+    {
+	LOG_FMT_INFO(exc_log, "FirstTimeFetchedResult");
+    }
+    size_t start_ns = clock_gettime_ns();
     assert(recv_msg != nullptr);
     ExchangeReceiverResult result;
     if (recv_msg->error_ptr != nullptr)
@@ -786,9 +796,12 @@ ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<B
         if (!result.meet_error && !recv_msg->chunks.empty())
         {
             assert(result.decode_detail.rows == 0);
+            //LOG_FMT_INFO(exc_log, "BeforeDecodingChunks.");
             result.decode_detail = decodeChunks(recv_msg, block_queue, header);
+            //LOG_FMT_INFO(exc_log, "AfterDecodingChunks.");
         }
     }
+    decode_cost += (clock_gettime_ns() - start_ns);
     return result;
 }
 

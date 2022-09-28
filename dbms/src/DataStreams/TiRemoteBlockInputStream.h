@@ -64,6 +64,8 @@ class TiRemoteBlockInputStream : public IProfilingBlockInputStream
     // CoprocessorBlockInputStream doesn't take care of this.
     size_t stream_id;
 
+    size_t decode_cost = 0;
+
     void initRemoteExecutionSummaries(tipb::SelectResponse & resp, size_t index)
     {
         for (const auto & execution_summary : resp.execution_summaries())
@@ -126,7 +128,7 @@ class TiRemoteBlockInputStream : public IProfilingBlockInputStream
 
     bool fetchRemoteResult()
     {
-        auto result = remote_reader->nextResult(block_queue, sample_block, stream_id);
+        auto result = remote_reader->nextResult(block_queue, sample_block, stream_id, decode_cost);
         if (result.meet_error)
         {
             LOG_FMT_WARNING(log, "remote reader meets error: {}", result.error_msg);
@@ -240,7 +242,7 @@ public:
 protected:
     void readSuffixImpl() override
     {
-        LOG_FMT_DEBUG(log, "finish read {} rows from remote", total_rows);
+        LOG_FMT_DEBUG(log, "finish read {} rows from remote decode cost {}", total_rows, decode_cost);
     }
 
     void appendInfo(FmtBuffer & buffer) const override

@@ -76,7 +76,8 @@ void PhysicalExchangeSender::transformImpl(DAGPipeline & pipeline, Context & con
                 dag_context,
                 fine_grained_shuffle.stream_count,
                 fine_grained_shuffle.batch_size,
-		context.getSettingsRef().enable_scatter_memory_reuse);
+		context.getSettingsRef().enable_scatter_memory_reuse,
+		log->identifier());
             stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
             stream->setExtraInfo(String(enableFineGrainedShuffleExtraInfo));
         });

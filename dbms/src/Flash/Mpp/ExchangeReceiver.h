@@ -145,7 +145,8 @@ public:
     ExchangeReceiverResult nextResult(
         std::queue<Block> & block_queue,
         const Block & header,
-        size_t stream_id);
+        size_t stream_id,
+	size_t & decode_cost);
 
     size_t getSourceNum() const { return source_num; }
     uint64_t getFineGrainedShuffleStreamCount() const { return fine_grained_shuffle_stream_count; }

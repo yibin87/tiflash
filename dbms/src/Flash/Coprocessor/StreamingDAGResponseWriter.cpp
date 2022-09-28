@@ -52,7 +52,8 @@ StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::Stream
     DAGContext & dag_context_,
     uint64_t fine_grained_shuffle_stream_count_,
     UInt64 fine_grained_shuffle_batch_size_,
-    bool reuse_scattered_columns_flag_)
+    bool reuse_scattered_columns_flag_,
+    const String & req_id)
     : DAGResponseWriter(records_per_chunk_, dag_context_)
     , batch_send_min_limit(batch_send_min_limit_)
     , should_send_exec_summary_at_last(should_send_exec_summary_at_last_)
@@ -64,6 +65,7 @@ StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::Stream
     , fine_grained_shuffle_batch_size(fine_grained_shuffle_batch_size_)
     , reuse_scattered_columns_flag(reuse_scattered_columns_flag_)
     , hash(0)
+    , log(Logger::get("StreamingDagResponseWriter", req_id))
 {
     rows_in_blocks = 0;
     partition_num = writer_->getPartitionNum();
@@ -88,6 +90,7 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::f
     {
         if constexpr (enable_fine_grained_shuffle)
         {
+	    //LOG_FMT_INFO(log, "FinishWrite block count {} {}", cached_block_count, blocks.size());
             assert(exchange_type == tipb::ExchangeType::Hash);
             batchWriteFineGrainedShuffle<true>();
         }
@@ -100,6 +103,7 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::f
     {
         if constexpr (enable_fine_grained_shuffle)
         {
+	    //LOG_FMT_INFO(log, "FinishWrite block count {} {}", cached_block_count, blocks.size());
             assert(exchange_type == tipb::ExchangeType::Hash);
             batchWriteFineGrainedShuffle<false>();
         }
@@ -111,8 +115,25 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::f
 }
 
 template <class StreamWriterPtr, bool enable_fine_grained_shuffle>
-void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::write(const Block & block)
+void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::write(const Block & block, bool finish)
 {
+    if (unlikely(finish))
+    {
+	if constexpr (enable_fine_grained_shuffle)
+    	{
+    	    assert(exchange_type == tipb::ExchangeType::Hash);
+	    LOG_FMT_INFO(log, "Finish Flag True {} {}", cached_block_count, total_blocks);
+    	    if (cached_block_count > 0) {
+    	    //if (static_cast<UInt64>(rows_in_blocks) >= fine_grained_shuffle_batch_size)
+    	    //if (static_cast<UInt64>(rows_in_blocks) >= 60000 * fine_grained_shuffle_stream_count)
+	    	//LOG_FMT_INFO(log, "LastTime SendPacket {} {}", cached_block_count, blocks.size());
+    	        batchWriteFineGrainedShuffle<false>();
+    	        cached_block_count = 0;
+    	    }
+    	}
+	return;
+    }
+
     if (block.columns() != dag_context.result_field_types.size())
         throw TiFlashException("Output column size mismatch with field type size", Errors::Coprocessor::Internal);
     size_t rows = block.rows();
@@ -120,13 +141,25 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::w
     if (rows > 0)
     {
         blocks.push_back(block);
+	cached_block_count++;
+	total_blocks++;
+	if (first_block)
+	{
+	    first_block = false;
+	    LOG_FMT_INFO(log, "FirstTime WriteBlock");
+	}
     }
 
     if constexpr (enable_fine_grained_shuffle)
     {
         assert(exchange_type == tipb::ExchangeType::Hash);
-        if (static_cast<UInt64>(rows_in_blocks) >= fine_grained_shuffle_batch_size)
+	//if (cached_block_count == fine_grained_shuffle_stream_count || rows_in_blocks >= 4096 * fine_grained_shuffle_stream_count) {
+	if (cached_block_count == fine_grained_shuffle_stream_count) {
+        //if (static_cast<UInt64>(rows_in_blocks) >= fine_grained_shuffle_batch_size)
+        //if (static_cast<UInt64>(rows_in_blocks) >= 60000 * fine_grained_shuffle_stream_count)
             batchWriteFineGrainedShuffle<false>();
+	    cached_block_count = 0;
+	}
     }
     else
     {
@@ -468,6 +501,7 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::b
 
     std::vector<TrackedMppDataPacket> tracked_packets(partition_num);
     std::vector<size_t> responses_row_count(partition_num, 0);
+    std::vector<size_t> packet_size(partition_num, 0);
 
     // fine_grained_shuffle_stream_count is in [0, 1024], and partition_num is uint16_t, so will not overflow.
     uint32_t bucket_num = partition_num * fine_grained_shuffle_stream_count;
@@ -511,10 +545,11 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::b
                     // encode into packet
                     responses_row_count[part_id] += block.rows();
                     chunk_codec_stream->encode(block, 0, block.rows());
-                    tracked_packets[part_id].addChunk(chunk_codec_stream->getString());
+		    size_t cur_packet_size = 0;
+                    tracked_packets[part_id].addChunk(chunk_codec_stream->getString(), cur_packet_size);
                     tracked_packets[part_id].packet.add_stream_ids(stream_idx);
                     chunk_codec_stream->clear();
-
+		    packet_size[part_id] += cur_packet_size;
                     // disassemble the block back to scatter columns
                     columns = block.mutateColumns();
                     for (size_t col_id = 0; col_id < num_columns; ++col_id)
@@ -567,7 +602,11 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::b
             }
         }
     }
-
+    if (first_packet)
+    {
+        first_packet = false;
+        LOG_FMT_INFO(log, "FirstTime SendPacket PacketSize {}", packet_size[0]);
+    }
     writePackets<send_exec_summary_at_last>(responses_row_count, tracked_packets);
 
     blocks.clear();
