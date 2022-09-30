@@ -710,7 +710,8 @@ template <typename RPCContext>
 DecodeDetail ExchangeReceiverBase<RPCContext>::decodeChunks(
     const std::shared_ptr<ReceivedMessage> & recv_msg,
     std::queue<Block> & block_queue,
-    const Block & header)
+    const Block & header,
+    Block &)
 {
     assert(recv_msg != nullptr);
     DecodeDetail detail;
@@ -721,14 +722,26 @@ DecodeDetail ExchangeReceiverBase<RPCContext>::decodeChunks(
 
     // Record total packet size even if fine grained shuffle is enabled.
     detail.packet_bytes = packet.ByteSizeLong();
-
+    size_t current_rows = 0;
     for (const String * chunk : recv_msg->chunks)
     {
-        Block block = CHBlockChunkCodec::decode(*chunk, header);
-        detail.rows += block.rows();
-        if (unlikely(block.rows() == 0))
-            continue;
-        block_queue.push(std::move(block));
+	Block res;
+	if (res) {
+	    CHBlockChunkCodec::decodeInPlace(*chunk, res);
+            detail.rows += res.rows() - current_rows;
+	    current_rows = res.rows();
+    	    if (unlikely(res.rows() == 0))
+                continue;
+	    if (current_rows > 8192)
+                block_queue.push(std::move(res));
+	} else {
+            res = CHBlockChunkCodec::decode(*chunk, header);
+            detail.rows += res.rows();
+	    current_rows = res.rows();
+    	    if (unlikely(res.rows() == 0))
+                continue;
+            block_queue.push(std::move(res));
+	}
     }
     return detail;
 }
@@ -742,6 +755,9 @@ ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<B
         return ExchangeReceiverResult::newError(0, "", "stream_id out of range");
     }
     std::shared_ptr<ReceivedMessage> recv_msg;
+    if (stream_id == 1) {
+        LOG_FMT_INFO(exc_log, "Before MsgChannel Size: {}", msg_channels[stream_id]->size());
+    }
     if (msg_channels[stream_id]->pop(recv_msg) != MPMCQueueResult::OK)
     {
         std::unique_lock lock(mu);
@@ -754,6 +770,9 @@ ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<B
         {
             return ExchangeReceiverResult::newEOF(name);
         }
+    }
+    if (stream_id == 1) {
+        LOG_FMT_INFO(exc_log, "After MsgChannel Size: {}", msg_channels[stream_id]->size());
     }
     if (decode_cost == 0)
     {
@@ -797,7 +816,8 @@ ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<B
         {
             assert(result.decode_detail.rows == 0);
             //LOG_FMT_INFO(exc_log, "BeforeDecodingChunks.");
-            result.decode_detail = decodeChunks(recv_msg, block_queue, header);
+	    Block res;
+            result.decode_detail = decodeChunks(recv_msg, block_queue, header, res);
             //LOG_FMT_INFO(exc_log, "AfterDecodingChunks.");
         }
     }

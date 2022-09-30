@@ -50,7 +50,8 @@ public:
         UInt64 fine_grained_shuffle_stream_count_,
         UInt64 fine_grained_shuffle_batch_size_,
 	bool reuse_scattered_columns_flag_,
-	const String & req_id = "");
+	const String & req_id = "",
+	int stream_id_ = 0);
     void write(const Block & block, bool finish) override;
     void finishWrite() override;
 
@@ -99,6 +100,7 @@ private:
     bool first_block = true;
     bool first_packet = true;
     size_t total_blocks = 0;
+    int stream_id = 0;
 };
 
 } // namespace DB

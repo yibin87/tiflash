@@ -91,6 +91,17 @@ NativeBlockInputStream::NativeBlockInputStream(
 
 NativeBlockInputStream::NativeBlockInputStream(
     ReadBuffer & istr_,
+    Block & block_holder_,
+    UInt64 server_revision_)
+    : istr(istr_)
+    , server_revision(server_revision_)
+    , append_mode(true)
+{
+    block_holder = block_holder_;
+}
+
+NativeBlockInputStream::NativeBlockInputStream(
+    ReadBuffer & istr_,
     UInt64 server_revision_,
     IndexForNativeFormat::Blocks::const_iterator index_block_it_,
     IndexForNativeFormat::Blocks::const_iterator index_block_end_)
@@ -166,6 +177,29 @@ Block NativeBlockInputStream::readImpl()
     /// Dimensions
     size_t columns = 0;
     size_t rows = 0;
+
+    if (append_mode)
+    {
+    	//readVarUInt(columns, istr);
+        //readVarUInt(rows, istr);
+	//auto mutable_columns = block_holder.mutateColumns();
+        //for (size_t i = 0; i < columns; ++i)
+        //{
+        //    ColumnWithTypeAndName column = block_holder.getByPosition(i);
+
+        //    /// Name
+	//    String name;
+        //    readBinary(name, istr);
+        //    /// Type
+        //    String type_name;
+        //    readBinary(type_name, istr);
+
+        //    double avg_value_size_hint = avg_value_size_hints.empty() ? 0 : avg_value_size_hints[i];
+        //    if (rows) /// If no rows, nothing to read.
+        //        readData(*column.type, *mutable_columns[i], istr, rows, avg_value_size_hint);
+        //}
+	//return block_holder;
+    }
 
     if (!use_index)
     {

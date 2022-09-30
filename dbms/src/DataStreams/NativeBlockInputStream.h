@@ -90,6 +90,11 @@ public:
         UInt64 server_revision_,
         bool align_column_name_with_header_ = false);
 
+    NativeBlockInputStream(
+        ReadBuffer & istr_,
+        Block & block_holder,
+        UInt64 server_revision_);
+
     /// For cases when we have an index. It allows to skip columns. Only columns specified in the index will be read.
     NativeBlockInputStream(
         ReadBuffer & istr_,
@@ -130,6 +135,8 @@ private:
     };
     std::vector<DataTypeWithTypeName> header_datatypes;
 
+    bool append_mode = false;
+    Block block_holder;
     bool use_index = false;
     IndexForNativeFormat::Blocks::const_iterator index_block_it;
     IndexForNativeFormat::Blocks::const_iterator index_block_end;

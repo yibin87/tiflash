@@ -72,14 +72,16 @@ void PhysicalExchangeSender::transformImpl(DAGPipeline & pipeline, Context & con
                 exchange_type,
                 context.getSettingsRef().dag_records_per_chunk,
                 context.getSettingsRef().batch_send_min_limit,
-                stream_id++ == 0, /// only one stream needs to sending execution summaries for the last response
+                stream_id == 0, /// only one stream needs to sending execution summaries for the last response
                 dag_context,
                 fine_grained_shuffle.stream_count,
                 fine_grained_shuffle.batch_size,
 		context.getSettingsRef().enable_scatter_memory_reuse,
-		log->identifier());
+		log->identifier(),
+		stream_id);
             stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
             stream->setExtraInfo(String(enableFineGrainedShuffleExtraInfo));
+	    stream_id++;
         });
         RUNTIME_CHECK(exchange_type == tipb::ExchangeType::Hash, ExchangeType_Name(exchange_type));
         RUNTIME_CHECK(fine_grained_shuffle.stream_count <= 1024, fine_grained_shuffle.stream_count);

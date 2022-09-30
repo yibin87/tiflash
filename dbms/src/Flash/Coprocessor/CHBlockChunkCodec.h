@@ -24,6 +24,7 @@ public:
     CHBlockChunkCodec() = default;
     Block decode(const String &, const DAGSchema & schema) override;
     static Block decode(const String &, const Block & header);
+    static void decodeInPlace(const String &, Block & block_holder);
     std::unique_ptr<ChunkCodecStream> newCodecStream(const std::vector<tipb::FieldType> & field_types) override;
 };
 

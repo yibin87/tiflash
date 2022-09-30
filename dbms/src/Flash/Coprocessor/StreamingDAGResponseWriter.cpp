@@ -53,7 +53,8 @@ StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::Stream
     uint64_t fine_grained_shuffle_stream_count_,
     UInt64 fine_grained_shuffle_batch_size_,
     bool reuse_scattered_columns_flag_,
-    const String & req_id)
+    const String & req_id,
+    int stream_id_)
     : DAGResponseWriter(records_per_chunk_, dag_context_)
     , batch_send_min_limit(batch_send_min_limit_)
     , should_send_exec_summary_at_last(should_send_exec_summary_at_last_)
@@ -66,6 +67,7 @@ StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::Stream
     , reuse_scattered_columns_flag(reuse_scattered_columns_flag_)
     , hash(0)
     , log(Logger::get("StreamingDagResponseWriter", req_id))
+    , stream_id(stream_id_)
 {
     rows_in_blocks = 0;
     partition_num = writer_->getPartitionNum();
@@ -602,9 +604,9 @@ void StreamingDAGResponseWriter<StreamWriterPtr, enable_fine_grained_shuffle>::b
             }
         }
     }
-    if (first_packet)
+    if (first_packet && stream_id == 1)
     {
-        first_packet = false;
+        //first_packet = false;
         LOG_FMT_INFO(log, "FirstTime SendPacket PacketSize {}", packet_size[0]);
     }
     writePackets<send_exec_summary_at_last>(responses_row_count, tracked_packets);

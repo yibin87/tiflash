@@ -183,7 +183,8 @@ private:
     DecodeDetail decodeChunks(
         const std::shared_ptr<ReceivedMessage> & recv_msg,
         std::queue<Block> & block_queue,
-        const Block & header);
+        const Block & header,
+	Block & block);
 
     void connectionDone(
         bool meet_error,

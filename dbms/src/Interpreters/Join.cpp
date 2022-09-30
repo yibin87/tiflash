@@ -851,9 +851,18 @@ void Join::insertFromBlock(const Block & block, size_t stream_index)
     }
     if (build_set_exceeded.load())
         return;
+
+    if (stream_index == 1) 
+    {
+        LOG_FMT_INFO(log, "BeforeBuildJoinHashTable");
+    }
     if (!insertFromBlockInternal(stored_block, stream_index))
     {
         build_set_exceeded.store(true);
+    }
+    if (stream_index == 1) 
+    {
+        LOG_FMT_INFO(log, "AfterBuildJoinHashTable");
     }
 }
 

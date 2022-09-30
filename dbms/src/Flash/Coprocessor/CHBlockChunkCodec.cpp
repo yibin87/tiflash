@@ -137,4 +137,11 @@ Block CHBlockChunkCodec::decode(const String & str, const Block & header)
     return block_in.read();
 }
 
+void CHBlockChunkCodec::decodeInPlace(const String & str, Block & block_holder)
+{
+    ReadBufferFromString read_buffer(str);
+    NativeBlockInputStream block_in(read_buffer, block_holder, 0);
+    block_in.read();
+}
+
 } // namespace DB
