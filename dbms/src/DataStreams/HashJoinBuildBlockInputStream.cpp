@@ -19,10 +19,23 @@ namespace DB
 {
 Block HashJoinBuildBlockInputStream::readImpl()
 {
+    size_t start = clock_gettime_ns();
     Block block = children.back()->read();
+    size_t read_end = clock_gettime_ns();
+    child_exec_ns += (read_end - start);
     if (!block)
+    {
+	size_t end = clock_gettime_ns();
+        total_exec_ns += (end - start);
+	LOG_FMT_INFO(log, "stream_id {} total_cost {} child_cost {}", concurrency_build_index, total_exec_ns, child_exec_ns);
         return block;
-    join->insertFromBlock(block, concurrency_build_index);
+    }
+    if (build_count < block_limit) {
+        join->insertFromBlock(block, concurrency_build_index);
+    }
+    build_count++;
+    size_t end = clock_gettime_ns();
+    total_exec_ns += (end - start);
     return block;
 }
 

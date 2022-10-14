@@ -277,7 +277,7 @@ void DAGQueryBlockInterpreter::handleJoin(const tipb::Join & join, DAGPipeline &
     // add a HashJoinBuildBlockInputStream to build a shared hash table
     auto get_concurrency_build_index = JoinInterpreterHelper::concurrencyBuildIndexGenerator(join_build_concurrency);
     build_pipeline.transform([&](auto & stream) {
-        stream = std::make_shared<HashJoinBuildBlockInputStream>(stream, join_ptr, get_concurrency_build_index(), log->identifier());
+        stream = std::make_shared<HashJoinBuildBlockInputStream>(stream, join_ptr, get_concurrency_build_index(), log->identifier(), 100000);
         stream->setExtraInfo(
             fmt::format("join build, build_side_root_executor_id = {}", dagContext().getJoinExecuteInfoMap()[query_block.source_name].build_side_root_executor_id));
         join_execute_info.join_build_streams.push_back(stream);
@@ -479,7 +479,8 @@ void DAGQueryBlockInterpreter::handleExchangeReceiver(DAGPipeline & pipeline)
         BlockInputStreamPtr stream = std::make_shared<ExchangeReceiverInputStream>(exchange_receiver,
                                                                                    log->identifier(),
                                                                                    query_block.source_name,
-                                                                                   /*stream_id=*/enable_fine_grained_shuffle ? i : 0);
+                                                                                   /*stream_id=*/enable_fine_grained_shuffle ? i : 0,
+										   false);
         exchange_receiver_io_input_streams.push_back(stream);
         stream = std::make_shared<SquashingBlockInputStream>(stream, 8192, 0, log->identifier());
         stream->setExtraInfo(extra_info);

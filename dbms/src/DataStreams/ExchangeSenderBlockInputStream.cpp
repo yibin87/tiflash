@@ -36,15 +36,20 @@ Block ExchangeSenderBlockInputStream::readImpl()
         FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_during_mpp_non_root_task_run);
     }
 
+    size_t start_ns = clock_gettime_ns();
     Block block = children.back()->read();
+    child_ns += (clock_gettime_ns() - start_ns);
     if (block)
     {
         total_rows += block.rows();
         writer->write(block, false);
+    	writer_ns += (clock_gettime_ns() - start_ns);
     }
     else 
     {
 	writer->write(block, true);
+    	writer_ns += (clock_gettime_ns() - start_ns);
+	LOG_FMT_INFO(log, "ExchangeSender child_collect_ns {} writer_ns {}", child_ns, writer_ns);
     }
     return block;
 }

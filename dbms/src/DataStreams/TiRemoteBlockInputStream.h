@@ -16,6 +16,7 @@
 
 #include <Common/FmtUtils.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
+#include <DataStreams/SquashNativeBlockInputStream.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/CoprocessorReader.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
@@ -63,6 +64,9 @@ class TiRemoteBlockInputStream : public IProfilingBlockInputStream
     // ExchangeReceiverBlockInputStream only need to read its own stream, i.e., streams[stream_id].
     // CoprocessorBlockInputStream doesn't take care of this.
     size_t stream_id;
+    size_t wait_ns = 0;
+    SquashNativeDecoderPtr decoder;
+    bool fetch_finished = false;
 
     void initRemoteExecutionSummaries(tipb::SelectResponse & resp, size_t index)
     {
@@ -128,14 +132,16 @@ class TiRemoteBlockInputStream : public IProfilingBlockInputStream
     {
         while (true)
         {
-            auto result = remote_reader->nextResult(block_queue, sample_block, stream_id);
+            auto result = remote_reader->nextResult(block_queue, sample_block, stream_id, wait_ns, decoder);
             if (result.meet_error)
             {
                 LOG_WARNING(log, "remote reader meets error: {}", result.error_msg);
                 throw Exception(result.error_msg);
             }
-            if (result.eof)
+            if (result.eof) {
+		fetch_finished = true;
                 return false;
+            }
             if (result.resp != nullptr && result.resp->has_error())
             {
                 LOG_WARNING(log, "remote reader meets error: {}", result.resp->error().DebugString());
@@ -177,7 +183,7 @@ class TiRemoteBlockInputStream : public IProfilingBlockInputStream
     }
 
 public:
-    TiRemoteBlockInputStream(std::shared_ptr<RemoteReader> remote_reader_, const String & req_id, const String & executor_id, size_t stream_id_)
+    TiRemoteBlockInputStream(std::shared_ptr<RemoteReader> remote_reader_, const String & req_id, const String & executor_id, size_t stream_id_, bool enable_merge_decoder_)
         : remote_reader(remote_reader_)
         , source_num(remote_reader->getSourceNum())
         , name(fmt::format("TiRemote({})", RemoteReader::name))
@@ -193,6 +199,8 @@ public:
         execution_summaries.resize(source_num);
         connection_profile_infos.resize(source_num);
         sample_block = Block(getColumnWithTypeAndName(toNamesAndTypes(remote_reader->getOutputSchema())));
+	size_t row_limit = enable_merge_decoder_ ? 8192 : 0;
+	decoder = std::make_unique<SquashNativeBlockInputStream>(sample_block, row_limit, true);
     }
 
     Block getHeader() const override { return sample_block; }
@@ -206,9 +214,11 @@ public:
     }
     Block readImpl() override
     {
+        if (fetch_finished)
+            return {};
         if (block_queue.empty())
         {
-            if (!fetchRemoteResult())
+            if (!fetchRemoteResult() && block_queue.empty())
                 return {};
         }
         // todo should merge some blocks to make sure the output block is big enough
@@ -243,7 +253,7 @@ public:
 protected:
     void readSuffixImpl() override
     {
-        LOG_FMT_DEBUG(log, "finish read {} rows from remote", total_rows);
+        LOG_FMT_DEBUG(log, "stream id {} finish read {} rows from remote, wait_ns {}", stream_id, total_rows, wait_ns);
     }
 
     void appendInfo(FmtBuffer & buffer) const override

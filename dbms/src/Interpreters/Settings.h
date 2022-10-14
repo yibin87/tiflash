@@ -372,6 +372,8 @@ struct Settings
     M(SettingBool, enable_fine_grained_join, 0, "0 for not support; 1 for build side only")                                                                                                                                             \
     M(SettingBool, enable_fine_grained_aggregation, 0, "0 for not support; 1 for build side only")                                                                                                                                      \
     M(SettingBool, enable_scatter_memory_reuse, false, "Enable scatter memory reuse")                                                                                                                                                   \
+    M(SettingBool, enable_merge_decode, false, "Enable merge when decoding in receiver")                                                                                                                                                \
+    M(SettingUInt64, join_build_block_limit, 5, "Enable merge when decoding in receiver")                                                                                                                                               \
                                                                                                                                                                                                                                         \
     M(SettingBool, enable_planner, true, "Enable planner")
 // clang-format on

@@ -17,6 +17,7 @@
 #include <Common/MPMCQueue.h>
 #include <Common/ThreadManager.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
+#include <DataStreams/SquashNativeBlockInputStream.h>
 #include <Flash/Coprocessor/ChunkCodec.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGUtils.h>
@@ -114,7 +115,6 @@ enum class ExchangeReceiverState
 };
 
 using MsgChannelPtr = std::unique_ptr<MPMCQueue<std::shared_ptr<ReceivedMessage>>>;
-
 template <typename RPCContext>
 class ExchangeReceiverBase
 {
@@ -142,7 +142,10 @@ public:
     ExchangeReceiverResult nextResult(
         std::queue<Block> & block_queue,
         const Block & header,
-        size_t stream_id);
+        size_t stream_id,
+	size_t & wait_ns,
+	SquashNativeDecoderPtr & decoder_ptr
+	);
 
     size_t getSourceNum() const { return source_num; }
     uint64_t getFineGrainedShuffleStreamCount() const { return fine_grained_shuffle_stream_count; }
@@ -180,7 +183,7 @@ private:
     DecodeDetail decodeChunks(
         const std::shared_ptr<ReceivedMessage> & recv_msg,
         std::queue<Block> & block_queue,
-        const Block & header);
+	SquashNativeDecoderPtr & decoder);
 
     void connectionDone(
         bool meet_error,
@@ -193,7 +196,8 @@ private:
     ExchangeReceiverResult toDecodeResult(
         std::queue<Block> & block_queue,
         const Block & header,
-        const std::shared_ptr<ReceivedMessage> & recv_msg);
+        const std::shared_ptr<ReceivedMessage> & recv_msg,
+	SquashNativeDecoderPtr & decoder);
 
 private:
     std::shared_ptr<RPCContext> rpc_context;

@@ -70,6 +70,8 @@ private:
     std::vector<IColumn::ScatterColumns> scattered; // size = num_columns
     int stream_id = 0;
     size_t cached_block_count = 0;
+    size_t write_packet_ns = 0;
+    size_t block_release_ns = 0;
     const LoggerPtr log;
 };
 

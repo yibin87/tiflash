@@ -53,7 +53,8 @@ bool pushPacket(size_t source_index,
                 const String & req_info,
                 const TrackedMppDataPacketPtr & tracked_packet,
                 const std::vector<MsgChannelPtr> & msg_channels,
-                LoggerPtr & log)
+                LoggerPtr & log,
+		size_t & wait_ns)
 {
     bool push_succeed = true;
 
@@ -64,6 +65,8 @@ bool pushPacket(size_t source_index,
     const String * resp_ptr = nullptr;
     if (!packet.data().empty())
         resp_ptr = &packet.data();
+//    if (!resp_ptr)
+//	return push_succeed;
 
     if constexpr (enable_fine_grained_shuffle)
     {
@@ -104,7 +107,11 @@ bool pushPacket(size_t source_index,
                 error_ptr,
                 resp_ptr,
                 std::move(chunks[i]));
+
+            size_t start_ns = clock_gettime_ns();
             push_succeed = msg_channels[i]->push(std::move(recv_msg)) == MPMCQueueResult::OK;
+            size_t end_ns = clock_gettime_ns();
+	    wait_ns += (end_ns - start_ns);
             if constexpr (is_sync)
                 fiu_do_on(FailPoints::random_receiver_sync_msg_push_failure_failpoint, push_succeed = false;);
             else
@@ -336,6 +343,7 @@ private:
             meet_error = true;
             err_msg = std::move(msg);
         }
+	LOG_FMT_INFO(log, "wait_source_ns {} wait_build_ns {}", wait_source_ns, wait_ns);
         stage = AsyncRequestStage::FINISHED;
     }
 
@@ -361,6 +369,9 @@ private:
 
     bool sendPackets()
     {
+        size_t start_ns = clock_gettime_ns();
+	if (last_source_ns != 0)
+		wait_source_ns += (start_ns - last_source_ns);
         // note: no exception should be thrown rudely, since it's called by a GRPC poller.
         for (size_t i = 0; i < read_packet_index; ++i)
         {
@@ -370,11 +381,14 @@ private:
                     req_info,
                     packet,
                     *msg_channels,
-                    log))
+                    log,
+		    wait_ns))
                 return false;
             // can't reuse packet since it is sent to readers.
             packet = std::make_shared<TrackedMppDataPacket>();
         }
+        size_t end_ns = clock_gettime_ns();
+	last_source_ns = end_ns;
         return true;
     }
 
@@ -403,6 +417,9 @@ private:
     Status finish_status = RPCContext::getStatusOK();
     LoggerPtr log;
     std::mutex mu;
+    size_t wait_ns = 0;
+    size_t last_source_ns = 0;
+    size_t wait_source_ns = 0;
 };
 } // namespace
 
@@ -600,6 +617,7 @@ void ExchangeReceiverBase<RPCContext>::readLoop(const Request & req)
 
     LoggerPtr log = Logger::get("ExchangeReceiver", exc_log->identifier(), req_info);
 
+    size_t total_packet_size = 0;
     try
     {
         auto status = RPCContext::getStatusOK();
@@ -612,6 +630,11 @@ void ExchangeReceiverBase<RPCContext>::readLoop(const Request & req)
                 LOG_TRACE(log, "begin next ");
                 TrackedMppDataPacketPtr packet = std::make_shared<TrackedMppDataPacket>();
                 bool success = reader->read(packet);
+	    
+		auto & inner_packet = packet->packet;
+
+    		total_packet_size += inner_packet.ByteSizeLong();
+
                 if (!success)
                     break;
                 has_data = true;
@@ -622,12 +645,14 @@ void ExchangeReceiverBase<RPCContext>::readLoop(const Request & req)
                     break;
                 }
 
+		size_t wait_ns = 0;
                 if (!pushPacket<enable_fine_grained_shuffle, true>(
                         req.source_index,
                         req_info,
                         packet,
                         msg_channels,
-                        log))
+                        log,
+			wait_ns))
                 {
                     meet_error = true;
                     local_err_msg = fmt::format("Push mpp packet failed. {}", getStatusString());
@@ -674,6 +699,7 @@ void ExchangeReceiverBase<RPCContext>::readLoop(const Request & req)
         meet_error = true;
         local_err_msg = getCurrentExceptionMessage(false);
     }
+    LOG_FMT_INFO(log, "total_packet_size {}", total_packet_size);
     connectionDone(meet_error, local_err_msg, log);
 }
 
@@ -681,7 +707,7 @@ template <typename RPCContext>
 DecodeDetail ExchangeReceiverBase<RPCContext>::decodeChunks(
     const std::shared_ptr<ReceivedMessage> & recv_msg,
     std::queue<Block> & block_queue,
-    const Block & header)
+    SquashNativeDecoderPtr & decoder)
 {
     assert(recv_msg != nullptr);
     DecodeDetail detail;
@@ -695,37 +721,62 @@ DecodeDetail ExchangeReceiverBase<RPCContext>::decodeChunks(
 
     for (const String * chunk : recv_msg->chunks)
     {
-        Block block = CHBlockChunkCodec::decode(*chunk, header);
-        detail.rows += block.rows();
-        if (unlikely(block.rows() == 0))
-            continue;
-        block_queue.push(std::move(block));
+	ReadBufferFromString read_buffer(*chunk);
+	auto result = decoder->read(read_buffer, false);
+	if (result.ready && result.block) {
+            detail.rows += result.block.rows();
+            if (unlikely(result.block.rows() == 0))
+                continue;
+            block_queue.push(std::move(result.block));
+	}
     }
     return detail;
 }
 
 template <typename RPCContext>
-ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<Block> & block_queue, const Block & header, size_t stream_id)
+ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::nextResult(std::queue<Block> & block_queue, const Block & header, size_t stream_id, size_t & wait_ns, SquashNativeDecoderPtr & decoder)
 {
     if (unlikely(stream_id >= msg_channels.size()))
     {
         LOG_FMT_ERROR(exc_log, "stream_id out of range, stream_id: {}, total_stream_count: {}", stream_id, msg_channels.size());
         return ExchangeReceiverResult::newError(0, "", "stream_id out of range");
     }
-    std::shared_ptr<ReceivedMessage> recv_msg;
-    if (msg_channels[stream_id]->pop(recv_msg) != MPMCQueueResult::OK)
-    {
-        std::unique_lock lock(mu);
-        return state != ExchangeReceiverState::NORMAL
-            ? ExchangeReceiverResult::newError(0, name, constructStatusString(state, err_msg))
-            : ExchangeReceiverResult::newEOF(name); /// live_connections == 0, msg_channel is finished, and state is NORMAL, that is the end.
-    }
-    else
-    {
-        assert(recv_msg != nullptr);
-        if (unlikely(recv_msg->error_ptr != nullptr))
-            return ExchangeReceiverResult::newError(recv_msg->source_index, recv_msg->req_info, recv_msg->error_ptr->msg());
-        return toDecodeResult(block_queue, header, recv_msg);
+    DecodeDetail detail;
+    while (true) {
+        std::shared_ptr<ReceivedMessage> recv_msg;
+        size_t start_ns = clock_gettime_ns();
+        if (msg_channels[stream_id]->pop(recv_msg) != MPMCQueueResult::OK)
+        {
+            size_t end_ns = clock_gettime_ns();
+            wait_ns += (end_ns - start_ns);
+
+	    String chunk = "";
+	    ReadBufferFromString read_buffer(chunk);
+            auto result = decoder->read(read_buffer, true);
+	    if (result.ready && result.block)
+	    	block_queue.push(std::move(result.block));
+
+	    std::unique_lock lock(mu);
+            return state != ExchangeReceiverState::NORMAL
+                ? ExchangeReceiverResult::newError(0, name, constructStatusString(state, err_msg))
+                : ExchangeReceiverResult::newEOF(name); /// live_connections == 0, msg_channel is finished, and state is NORMAL, that is the end.
+        }
+        else
+        {
+            size_t end_ns = clock_gettime_ns();
+            wait_ns += (end_ns - start_ns);
+            assert(recv_msg != nullptr);
+            if (unlikely(recv_msg->error_ptr != nullptr))
+                return ExchangeReceiverResult::newError(recv_msg->source_index, recv_msg->req_info, recv_msg->error_ptr->msg());
+            auto current_result = toDecodeResult(block_queue, header, recv_msg, decoder);
+	    if (current_result.meet_error)
+		return current_result;
+
+	    current_result.decode_detail.packet_bytes += detail.packet_bytes;
+	    detail.packet_bytes = current_result.decode_detail.packet_bytes;
+	    if (current_result.decode_detail.rows > 0)
+                return current_result;
+        }
     }
 }
 
@@ -733,7 +784,8 @@ template <typename RPCContext>
 ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::toDecodeResult(
     std::queue<Block> & block_queue,
     const Block & header,
-    const std::shared_ptr<ReceivedMessage> & recv_msg)
+    const std::shared_ptr<ReceivedMessage> & recv_msg,
+    SquashNativeDecoderPtr & decoder)
 {
     assert(recv_msg != nullptr);
     if (recv_msg->resp_ptr != nullptr) /// the data of the last packet is serialized from tipb::SelectResponse including execution summaries.
@@ -757,7 +809,7 @@ ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::toDecodeResult(
             }
             else if (!recv_msg->chunks.empty())
             {
-                result.decode_detail = decodeChunks(recv_msg, block_queue, header);
+                result.decode_detail = decodeChunks(recv_msg, block_queue, decoder);
             }
             return result;
         }
@@ -765,7 +817,7 @@ ExchangeReceiverResult ExchangeReceiverBase<RPCContext>::toDecodeResult(
     else /// the non-last packets
     {
         auto result = ExchangeReceiverResult::newOk(nullptr, recv_msg->source_index, recv_msg->req_info);
-        result.decode_detail = decodeChunks(recv_msg, block_queue, header);
+        result.decode_detail = decodeChunks(recv_msg, block_queue, decoder);
         return result;
     }
 }

@@ -29,9 +29,11 @@ public:
         const BlockInputStreamPtr & input,
         JoinPtr join_,
         size_t concurrency_build_index_,
-        const String & req_id)
+        const String & req_id,
+	size_t block_limit_)
         : concurrency_build_index(concurrency_build_index_)
         , log(Logger::get(NAME, req_id))
+	, block_limit(block_limit_)
     {
         children.push_back(input);
         join = join_;
@@ -47,6 +49,10 @@ private:
     JoinPtr join;
     size_t concurrency_build_index;
     const LoggerPtr log;
+    size_t build_count = 0;
+    size_t total_exec_ns = 0;
+    size_t child_exec_ns = 0;
+    size_t block_limit = 5;
 };
 
 } // namespace DB

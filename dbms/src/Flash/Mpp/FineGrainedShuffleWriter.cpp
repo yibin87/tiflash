@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <Common/TiFlashException.h>
+#include <Common/Stopwatch.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Mpp/FineGrainedShuffleWriter.h>
 #include <Flash/Mpp/HashBaseWriterHelper.h>
@@ -62,11 +63,13 @@ void FineGrainedShuffleWriter<StreamWriterPtr>::finishWrite()
     {
         batchWriteFineGrainedShuffle<false>();
     }
+    LOG_FMT_INFO(log, "FinishWrite write_packet_ns {} block_release_ns {}", write_packet_ns, block_release_ns);
 }
 
 template <class StreamWriterPtr>
 void FineGrainedShuffleWriter<StreamWriterPtr>::write(const Block & block, bool finish)
 {
+    LOG_FMT_INFO(log, "WriteBlock");
     if (unlikely(finish))
     {
 	LOG_FMT_INFO(log, "LastWrite {} cached blocks", cached_block_count);
@@ -93,10 +96,11 @@ void FineGrainedShuffleWriter<StreamWriterPtr>::write(const Block & block, bool 
 	cached_block_count++;
     }
 
-    //if (cached_block_count == fine_grained_shuffle_stream_count || static_cast<UInt64>(rows_in_blocks) >= fine_grained_shuffle_batch_size * (fine_grained_shuffle_stream_count >> 1)) {
-    if (cached_block_count == fine_grained_shuffle_stream_count) {
+    if (cached_block_count == fine_grained_shuffle_stream_count || static_cast<UInt64>(rows_in_blocks) >= fine_grained_shuffle_batch_size) {
+    //if (cached_block_count == fine_grained_shuffle_stream_count) {
         batchWriteFineGrainedShuffle<false>();
 	cached_block_count = 0;
+	rows_in_blocks = 0;
     }
 }
 
@@ -228,7 +232,10 @@ void FineGrainedShuffleWriter<StreamWriterPtr>::batchWriteFineGrainedShuffle()
                     }
 		}
 	    }
+	    size_t start_ns = clock_gettime_ns();
 	    blocks.clear();
+	    size_t end_ns = clock_gettime_ns();
+            block_release_ns += (end_ns - start_ns);
 	}
 	else
 	{
@@ -254,7 +261,6 @@ void FineGrainedShuffleWriter<StreamWriterPtr>::batchWriteFineGrainedShuffle()
                 }
             }
             assert(blocks.empty());
-            rows_in_blocks = 0;
 
             // For i-th stream_count buckets, send to i-th tiflash node.
             for (size_t bucket_idx = 0; bucket_idx < bucket_num; bucket_idx += fine_grained_shuffle_stream_count)
@@ -277,11 +283,11 @@ void FineGrainedShuffleWriter<StreamWriterPtr>::batchWriteFineGrainedShuffle()
 	}
     }
 
-    if (stream_id == 1)
-    {
-	LOG_FMT_INFO(log, "Stream1 writing packets!");
-    }
+    LOG_FMT_INFO(log, "WritePackets!");
+    size_t start_ns = clock_gettime_ns();
     writePackets<send_exec_summary_at_last>(tracked_packets);
+    size_t end_ns = clock_gettime_ns();
+    write_packet_ns += (end_ns - start_ns);
 }
 
 template <class StreamWriterPtr>

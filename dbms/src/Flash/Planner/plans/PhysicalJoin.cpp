@@ -229,7 +229,7 @@ void PhysicalJoin::buildSideTransform(DAGPipeline & build_pipeline, Context & co
     String join_build_extra_info = fmt::format("join build, build_side_root_executor_id = {}", build()->execId());
     auto & join_execute_info = dag_context.getJoinExecuteInfoMap()[execId()];
     build_pipeline.transform([&](auto & stream) {
-        stream = std::make_shared<HashJoinBuildBlockInputStream>(stream, join_ptr, get_concurrency_build_index(), log->identifier());
+        stream = std::make_shared<HashJoinBuildBlockInputStream>(stream, join_ptr, get_concurrency_build_index(), log->identifier(), settings.join_build_block_limit);
         stream->setExtraInfo(join_build_extra_info);
         join_execute_info.join_build_streams.push_back(stream);
     });

@@ -77,14 +77,18 @@ void PhysicalExchangeReceiver::transformImpl(DAGPipeline & pipeline, Context & c
         stream_count = std::min(max_streams, mpp_exchange_receiver->getFineGrainedShuffleStreamCount());
     }
 
+    bool enable_merge_decode = context.getSettingsRef().enable_merge_decode;
     for (size_t i = 0; i < stream_count; ++i)
     {
         BlockInputStreamPtr stream = std::make_shared<ExchangeReceiverInputStream>(mpp_exchange_receiver,
                                                                                    log->identifier(),
                                                                                    execId(),
-                                                                                   /*stream_id=*/enable_fine_grained_shuffle ? i : 0);
+                                                                                   /*stream_id=*/enable_fine_grained_shuffle ? i : 0,
+										   enable_merge_decode);
         exchange_receiver_io_input_streams.push_back(stream);
-        stream = std::make_shared<SquashingBlockInputStream>(stream, 8192, 0, log->identifier());
+	if (!enable_merge_decode) {
+            stream = std::make_shared<SquashingBlockInputStream>(stream, 8192, 0, log->identifier());
+	}
         stream->setExtraInfo(extra_info);
         pipeline.streams.push_back(stream);
     }

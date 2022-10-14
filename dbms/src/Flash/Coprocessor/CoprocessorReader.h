@@ -15,6 +15,7 @@
 #pragma once
 
 #include <DataStreams/IProfilingBlockInputStream.h>
+#include <DataStreams/SquashNativeBlockInputStream.h>
 #include <Flash/Coprocessor/ArrowChunkCodec.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/DecodeDetail.h>
@@ -140,7 +141,7 @@ public:
     }
 
     // stream_id is only meaningful for ExchagneReceiver.
-    CoprocessorReaderResult nextResult(std::queue<Block> & block_queue, const Block & header, size_t /*stream_id*/)
+    CoprocessorReaderResult nextResult(std::queue<Block> & block_queue, const Block & header, size_t /*stream_id*/, size_t &, SquashNativeDecoderPtr &)
     {
         auto && [result, has_next] = resp_iter.next();
         if (!result.error.empty())
