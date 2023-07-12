@@ -13,7 +13,9 @@
 // limitations under the License.
 
 #pragma once
+#include <Columns/ColumnSet.h>
 #include <Common/MemoryTrackerSetter.h>
+#include <Interpreters/Set.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/ReadThread/WorkQueue.h>
@@ -231,6 +233,13 @@ public:
     ColumnDefines & getColumnToRead()
     {
         return columns_to_read;
+    }
+
+    void updateFilterSet(SetPtr new_set)
+    {
+        const auto & expression = filter->before_where;
+        RUNTIME_CHECK(expression->getActions()[0].type == ExpressionAction::ADD_COLUMN);
+        expression->getMutableActions()[0].added_column = ColumnSet::create(1, new_set);
     }
 
     void appendRSOperator(RSOperatorPtr & new_filter)

@@ -187,6 +187,8 @@ public:
 
     const Actions & getActions() const { return actions; }
 
+    Actions & getMutableActions() { return actions; }
+
     /// Get a list of input columns.
     Names getRequiredColumns() const
     {

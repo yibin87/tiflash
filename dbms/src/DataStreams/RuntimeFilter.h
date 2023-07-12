@@ -59,6 +59,10 @@ public:
 
     void setINValuesSet(const std::shared_ptr<Set> & in_values_set_);
 
+    SetPtr getInValueSet() const {
+        return in_values_set;
+    }
+
     void build();
 
     void updateValues(const ColumnWithTypeAndName & values, const LoggerPtr & log);

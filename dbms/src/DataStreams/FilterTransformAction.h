@@ -16,6 +16,7 @@
 
 #include <Columns/FilterDescription.h>
 #include <Interpreters/ExpressionActions.h>
+#include <Interpreters/Set.h>
 
 namespace DB
 {
@@ -37,6 +38,7 @@ public:
     bool transform(Block & block, FilterPtr & res_filter, bool return_filter);
     Block getHeader() const;
     ExpressionActionsPtr getExperssion() const;
+    void updateInSetForRF(SetPtr new_set);
 
 private:
     Block header;

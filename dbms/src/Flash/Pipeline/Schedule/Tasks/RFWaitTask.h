@@ -67,8 +67,9 @@ public:
     {
         for (const RuntimeFilterPtr & rf : ready_rf_list)
         {
-            auto rs_operator = rf->parseToRSOperator(task_pool->getColumnToRead());
-            task_pool->appendRSOperator(rs_operator);
+            //auto rs_operator = rf->parseToRSOperator(task_pool->getColumnToRead());
+            //task_pool->appendRSOperator(rs_operator);
+            task_pool->updateFilterSet(rf->getInValueSet());
         }
         DM::SegmentReadTaskScheduler::instance().add(task_pool);
     }

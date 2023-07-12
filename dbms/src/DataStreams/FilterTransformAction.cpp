@@ -15,6 +15,7 @@
 #include <Columns/ColumnConst.h>
 #include <Columns/ColumnsCommon.h>
 #include <Columns/ColumnsNumber.h>
+#include <Columns/ColumnSet.h>
 #include <Columns/FilterDescription.h>
 #include <Common/typeid_cast.h>
 #include <DataStreams/FilterTransformAction.h>
@@ -67,6 +68,12 @@ Block FilterTransformAction::getHeader() const
 ExpressionActionsPtr FilterTransformAction::getExperssion() const
 {
     return expression;
+}
+
+void FilterTransformAction::updateInSetForRF(SetPtr new_set)
+{
+    RUNTIME_CHECK(expression->getActions()[0].type == ExpressionAction::ADD_COLUMN);
+    expression->getMutableActions()[0].added_column = ColumnSet::create(1, new_set);
 }
 
 bool FilterTransformAction::transform(Block & block, FilterPtr & res_filter, bool return_filter)

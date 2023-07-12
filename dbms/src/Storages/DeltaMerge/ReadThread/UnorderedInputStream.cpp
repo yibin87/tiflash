@@ -43,8 +43,9 @@ void UnorderedInputStream::pushDownReadyRFList(std::vector<RuntimeFilterPtr> rea
 {
     for (const RuntimeFilterPtr & rf : readyRFList)
     {
-        auto rs_operator = rf->parseToRSOperator(task_pool->getColumnToRead());
-        task_pool->appendRSOperator(rs_operator);
+        //auto rs_operator = rf->parseToRSOperator(task_pool->getColumnToRead());
+        //task_pool->appendRSOperator(rs_operator);
+        task_pool->updateFilterSet(rf->getInValueSet());
     }
 }
 } // namespace DB::DM

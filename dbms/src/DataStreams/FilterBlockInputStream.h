@@ -42,6 +42,10 @@ public:
     String getName() const override { return NAME; }
     Block getHeader() const override;
 
+    void updateInSetForRF(SetPtr new_set) {
+        filter_transform_action.updateInSetForRF(new_set);
+    }
+
 protected:
     Block readImpl() override
     {
