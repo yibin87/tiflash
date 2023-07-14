@@ -352,8 +352,6 @@ public:
     /// thus we need to pay attention to scan_context_map usage that time.
     std::unordered_map<String, DM::ScanContextPtr> scan_context_map;
 
-    RuntimeFilterMgr runtime_filter_mgr;
-
 private:
     void initExecutorIdToJoinIdMap();
     void initOutputInfo();

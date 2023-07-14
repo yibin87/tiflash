@@ -14,6 +14,7 @@
 
 #include <Flash/Disaggregated/S3LockClient.h>
 #include <Flash/Mpp/MPPHandler.h>
+#include <Flash/Coprocessor/RuntimeFilterMgr.h>
 #include <Flash/Mpp/MPPTaskManager.h>
 #include <Flash/Mpp/MinTSOScheduler.h>
 #include <Interpreters/Context.h>
@@ -135,6 +136,7 @@ TMTContext::TMTContext(Context & context_, const TiFlashRaftConfig & raft_config
               context.getSettingsRef().task_scheduler_thread_soft_limit,
               context.getSettingsRef().task_scheduler_thread_hard_limit,
               context.getSettingsRef().task_scheduler_active_set_soft_limit)))
+    , runtime_filter_manager(std::make_shared<RuntimeFilterMgr>())
     , engine(raft_config.engine)
     , batch_read_index_timeout_ms(DEFAULT_BATCH_READ_INDEX_TIMEOUT_MS)
     , wait_index_timeout_ms(DEFAULT_WAIT_INDEX_TIMEOUT_MS)
@@ -326,6 +328,11 @@ const OwnerManagerPtr & TMTContext::getS3GCOwnerManager() const
 MPPTaskManagerPtr TMTContext::getMPPTaskManager()
 {
     return mpp_task_manager;
+}
+
+RuntimeFilterMgrPtr TMTContext::getRuntimeFilterManager()
+{
+    return runtime_filter_manager;
 }
 
 const std::unordered_set<std::string> & TMTContext::getIgnoreDatabases() const

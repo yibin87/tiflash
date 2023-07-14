@@ -235,8 +235,9 @@ public:
         return columns_to_read;
     }
 
-    void updateFilterSet(SetPtr new_set)
+    void updateFilterSet(int id, SetPtr new_set)
     {
+        LOG_INFO(log, "RF id {}, NewSet unique set elements: {}", id, new_set->getUniqueSetElements().size());
         const auto & expression = filter->before_where;
         RUNTIME_CHECK(expression->getActions()[0].type == ExpressionAction::ADD_COLUMN);
         expression->getMutableActions()[0].added_column = ColumnSet::create(1, new_set);

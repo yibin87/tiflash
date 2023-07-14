@@ -38,6 +38,9 @@ using BackGroundServicePtr = std::unique_ptr<BackgroundService>;
 class MPPTaskManager;
 using MPPTaskManagerPtr = std::shared_ptr<MPPTaskManager>;
 
+class RuntimeFilterMgr;
+using RuntimeFilterMgrPtr = std::shared_ptr<RuntimeFilterMgr>;
+
 class GCManager;
 using GCManagerPtr = std::shared_ptr<GCManager>;
 
@@ -118,6 +121,8 @@ public:
 
     MPPTaskManagerPtr getMPPTaskManager();
 
+    RuntimeFilterMgrPtr getRuntimeFilterManager();
+
     void shutdown();
 
     void restore(PathPool & path_pool, const TiFlashRaftProxyHelper * proxy_helper = nullptr);
@@ -166,6 +171,7 @@ private:
     const std::unordered_set<std::string> ignore_databases;
     std::shared_ptr<TiDBSchemaSyncerManager> schema_sync_manager;
     MPPTaskManagerPtr mpp_task_manager;
+    RuntimeFilterMgrPtr runtime_filter_manager;
 
     ::TiDB::StorageEngine engine;
 

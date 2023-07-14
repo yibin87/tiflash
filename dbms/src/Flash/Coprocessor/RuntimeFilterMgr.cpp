@@ -20,6 +20,7 @@ RuntimeFilteList dummy_runtime_filter_list;
 
 RuntimeFilteList RuntimeFilterMgr::getLocalRuntimeFilterByIds(const std::vector<int> & ids)
 {
+    std::unique_lock lock(mu);
     std::vector<RuntimeFilterPtr> result;
     for (int id : ids)
     {
@@ -34,6 +35,7 @@ RuntimeFilteList RuntimeFilterMgr::getLocalRuntimeFilterByIds(const std::vector<
 
 void RuntimeFilterMgr::registerRuntimeFilterList(std::vector<RuntimeFilterPtr> & rfList)
 {
+    std::unique_lock lock(mu);
     for (const auto & rf : rfList)
     {
         local_runtime_filter_map[rf->id] = rf;

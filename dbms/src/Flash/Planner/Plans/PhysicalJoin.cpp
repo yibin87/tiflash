@@ -32,6 +32,7 @@
 #include <Interpreters/Context.h>
 #include <common/logger_useful.h>
 #include <fmt/format.h>
+#include <Storages/Transaction/TMTContext.h>
 
 namespace DB
 {
@@ -139,7 +140,9 @@ PhysicalPlanNodePtr PhysicalJoin::build(
 
     auto runtime_filter_list = tiflash_join.genRuntimeFilterList(context, build_side_header, log);
     LOG_DEBUG(log, "before register runtime filter list, list size:{}", runtime_filter_list.size());
-    context.getDAGContext()->runtime_filter_mgr.registerRuntimeFilterList(runtime_filter_list);
+    //context.getDAGContext()->runtime_filter_mgr.registerRuntimeFilterList(runtime_filter_list);
+    context.getTMTContext().getRuntimeFilterManager()->registerRuntimeFilterList(runtime_filter_list);
+
 
     JoinPtr join_ptr = std::make_shared<Join>(
         probe_key_names,

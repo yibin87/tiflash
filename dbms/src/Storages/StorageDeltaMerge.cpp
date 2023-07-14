@@ -952,7 +952,7 @@ RuntimeFilteList StorageDeltaMerge::parseRuntimeFilterList(const SelectQueryInfo
     {
         return std::vector<RuntimeFilterPtr>{};
     }
-    auto runtime_filter_list = db_context.getDAGContext()->runtime_filter_mgr.getLocalRuntimeFilterByIds(
+    auto runtime_filter_list = db_context.getTMTContext().getRuntimeFilterManager()->getLocalRuntimeFilterByIds(
         query_info.dag_query->runtime_filter_ids);
     LOG_DEBUG(log, "build runtime filter in local stream, list size:{}", runtime_filter_list.size());
     return runtime_filter_list;

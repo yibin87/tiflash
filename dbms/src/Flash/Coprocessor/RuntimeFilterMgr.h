@@ -41,5 +41,6 @@ public:
 private:
     // Local rf id -> runtime filter ref
     std::unordered_map<int, RuntimeFilterPtr> local_runtime_filter_map;
+    std::mutex mu;
 };
 } // namespace DB

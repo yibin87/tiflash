@@ -69,7 +69,7 @@ public:
         {
             //auto rs_operator = rf->parseToRSOperator(task_pool->getColumnToRead());
             //task_pool->appendRSOperator(rs_operator);
-            task_pool->updateFilterSet(rf->getInValueSet());
+            task_pool->updateFilterSet(rf->id, rf->getInValueSet());
         }
         DM::SegmentReadTaskScheduler::instance().add(task_pool);
     }

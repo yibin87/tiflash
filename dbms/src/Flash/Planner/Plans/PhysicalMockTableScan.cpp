@@ -26,6 +26,7 @@
 #include <Operators/BlockInputStreamSourceOp.h>
 #include <Operators/UnorderedSourceOp.h>
 #include <Storages/DeltaMerge/ReadThread/UnorderedInputStream.h>
+#include <Storages/Transaction/TMTContext.h>
 
 namespace DB
 {
@@ -141,7 +142,7 @@ void PhysicalMockTableScan::buildPipelineExecGroupImpl(
         {
             if (auto * source_op = dynamic_cast<UnorderedSourceOp *>(group_builder.getCurBuilder(i).source_op.get()))
             {
-                auto runtime_filter_list = context.getDAGContext()->runtime_filter_mgr.getLocalRuntimeFilterByIds(runtime_filter_ids);
+                auto runtime_filter_list = context.getTMTContext().getRuntimeFilterManager()->getLocalRuntimeFilterByIds(runtime_filter_ids);
                 // todo config max wait time
                 source_op->setRuntimeFilterInfo(runtime_filter_list, rf_max_wait_time_ms);
             }
@@ -211,7 +212,7 @@ void PhysicalMockTableScan::buildRuntimeFilterInLocalStream(Context & context)
     {
         if (auto * p_stream = dynamic_cast<DM::UnorderedInputStream *>(local_stream.get()))
         {
-            auto runtime_filter_list = context.getDAGContext()->runtime_filter_mgr.getLocalRuntimeFilterByIds(runtime_filter_ids);
+            auto runtime_filter_list = context.getTMTContext().getRuntimeFilterManager()->getLocalRuntimeFilterByIds(runtime_filter_ids);
             // todo config max wait time
             p_stream->setRuntimeFilterInfo(runtime_filter_list, rf_max_wait_time_ms);
         }
