@@ -240,12 +240,17 @@ public:
         LOG_INFO(log, "RF id {}, NewSet unique set elements: {}", id, new_set->getSetElements().size());
         const auto & expression = filter->before_where;
         int i = 0;
+        bool first = true;
         for (auto & action : expression->getActions())
         {
             if (action.type == ExpressionAction::ADD_COLUMN && action.result_type->getTypeId() == TypeIndex::Set)
             {
-                LOG_INFO(log, "ADD_COLUMN name: {}", action.result_name);
-                expression->getMutableActions()[i].added_column = ColumnSet::create(1, new_set);
+                if ((id == 0 && first) || (id == 1 && !first))
+                {
+                    LOG_INFO(log, "ADD_COLUMN name: {}", action.result_name);
+                    expression->getMutableActions()[i].added_column = ColumnSet::create(1, new_set);
+                }
+                first = false;
             }
             ++i;
         }
