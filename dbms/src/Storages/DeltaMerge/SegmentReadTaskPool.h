@@ -245,7 +245,7 @@ public:
         {
             if (action.type == ExpressionAction::ADD_COLUMN && action.result_type->getTypeId() == TypeIndex::Set)
             {
-                if ((id == 0 && first) || (id == 1 && !first))
+                if (id == 1 && !first)
                 {
                     LOG_INFO(log, "ADD_COLUMN name: {}", action.result_name);
                     expression->getMutableActions()[i].added_column = ColumnSet::create(1, new_set);
