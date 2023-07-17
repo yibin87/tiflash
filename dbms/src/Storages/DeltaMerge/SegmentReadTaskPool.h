@@ -237,10 +237,18 @@ public:
 
     void updateFilterSet(int id, SetPtr new_set)
     {
-        LOG_INFO(log, "RF id {}, NewSet unique set elements: {}", id, new_set->getUniqueSetElements().size());
+        LOG_INFO(log, "RF id {}, NewSet unique set elements: {}", id, new_set->getSetElements().size());
         const auto & expression = filter->before_where;
-        RUNTIME_CHECK(expression->getActions()[0].type == ExpressionAction::ADD_COLUMN);
-        expression->getMutableActions()[0].added_column = ColumnSet::create(1, new_set);
+        int i = 0;
+        for (auto & action : expression->getActions())
+        {
+            if (action.type == ExpressionAction::ADD_COLUMN && action.result_type->getTypeId() == TypeIndex::Set)
+            {
+                LOG_INFO(log, "ADD_COLUMN name: {}", action.result_name);
+                expression->getMutableActions()[i].added_column = ColumnSet::create(1, new_set);
+            }
+            ++i;
+        }
     }
 
     void appendRSOperator(RSOperatorPtr & new_filter)
