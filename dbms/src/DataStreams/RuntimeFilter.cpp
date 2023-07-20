@@ -163,6 +163,7 @@ bool RuntimeFilter::await(int64_t ms_remaining)
 
 bool RuntimeFilter::updateStatus(RuntimeFilterStatus status_, const std::string & reason)
 {
+    //LOG_INFO(log, )
     // check and update status
     {
         std::lock_guard<std::mutex> lock(mtx);

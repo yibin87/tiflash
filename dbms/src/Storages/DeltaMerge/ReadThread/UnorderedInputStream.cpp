@@ -27,25 +27,38 @@ void UnorderedInputStream::prepareRuntimeFilter()
     // wait for runtime filter ready
     Stopwatch sw;
     std::vector<RuntimeFilterPtr> ready_rf_list;
+    std::vector<RuntimeFilterPtr> failed_rf_list;
     for (const RuntimeFilterPtr & rf : runtime_filter_list)
     {
+        //LOG_DEBUG(log, "Waiting rf id: {}", rf->id);
         bool is_ready = rf->await(max_wait_time_ms - sw.elapsedMilliseconds());
+        //LOG_DEBUG(log, "Rf id: {}, is ready: {}", rf->id, is_ready);
         if (is_ready)
         {
             ready_rf_list.push_back(rf);
         }
+        else
+        {
+            failed_rf_list.push_back(rf);
+        }
     }
     // append ready rfs into push down filter
-    pushDownReadyRFList(ready_rf_list);
+    pushDownReadyRFList(ready_rf_list, failed_rf_list);
 }
 
-void UnorderedInputStream::pushDownReadyRFList(std::vector<RuntimeFilterPtr> readyRFList)
+void UnorderedInputStream::pushDownReadyRFList(std::vector<RuntimeFilterPtr> readyRFList, std::vector<RuntimeFilterPtr> failedRFList)
 {
     for (const RuntimeFilterPtr & rf : readyRFList)
     {
         //auto rs_operator = rf->parseToRSOperator(task_pool->getColumnToRead());
         //task_pool->appendRSOperator(rs_operator);
         task_pool->updateFilterSet(rf->id, rf->getInValueSet());
+    }
+    for (const RuntimeFilterPtr & rf : failedRFList)
+    {
+        //auto rs_operator = rf->parseToRSOperator(task_pool->getColumnToRead());
+        //task_pool->appendRSOperator(rs_operator);
+        task_pool->invalidateFilter(rf->id);
     }
 }
 } // namespace DB::DM

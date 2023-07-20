@@ -354,6 +354,7 @@ public:
     {
         return function->getMonotonicityForRange(type, left, right);
     }
+    std::shared_ptr<IFunction> getFunction() { return function; }
 
 private:
     std::shared_ptr<IFunction> function;

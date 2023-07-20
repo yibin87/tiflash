@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #pragma once
+#include <Functions/IFunction.h>
+#include <Functions/FunctionsMiscellaneous.h>
 #include <Columns/ColumnSet.h>
 #include <Common/MemoryTrackerSetter.h>
 #include <Interpreters/Set.h>
@@ -235,22 +237,56 @@ public:
         return columns_to_read;
     }
 
-    void updateFilterSet(int id, SetPtr new_set)
+    void invalidateFilter(int id)
     {
-        LOG_INFO(log, "RF id {}, NewSet unique set elements: {}", id, new_set->getSetElements().size());
+        LOG_INFO(log, "Invalidate RF id {}", id);
         const auto & expression = filter->before_where;
         int i = 0;
-        bool first = true;
         for (auto & action : expression->getActions())
         {
             if (action.type == ExpressionAction::ADD_COLUMN && action.result_type->getTypeId() == TypeIndex::Set)
             {
-                if (id != 1 || !first)
+                if (expression->getMutableActions()[i+1].type == ExpressionAction::APPLY_FUNCTION)
                 {
-                    LOG_INFO(log, "ADD_COLUMN name: {}", action.result_name);
-                    expression->getMutableActions()[i].added_column = ColumnSet::create(1, new_set);
+                    auto & function = expression->getMutableActions()[i+1].function;
+                    if (auto * default_func_base_ptr = dynamic_cast<DefaultFunctionBase *>(function.get()))
+                    {
+                        if (auto * in_func_ptr = dynamic_cast<FunctionIn<false, false, false>*>(default_func_base_ptr->getFunction().get())) {
+                            LOG_INFO(log, "Set FunctionIn Passthrough");
+                            in_func_ptr->setPassThrough();
+                        }
+                        else
+                        {
+                            throw new Exception("Function can't be cast as FunctionIn<false, false, false>");
+                        }
+                    }
                 }
-                first = false;
+            }
+            ++i;
+        }
+    }
+
+    void updateFilterSet(int id, SetPtr new_set)
+    {
+        LOG_INFO(log, "RF id {}, NewSet unique set elements: {}", id, new_set->getTotalRowCount());
+        const auto & expression = filter->before_where;
+        int i = 0;
+        for (auto & action : expression->getActions())
+        {
+            if (action.type == ExpressionAction::ADD_COLUMN && action.result_type->getTypeId() == TypeIndex::Set)
+            {
+                if (expression->getMutableActions()[i+1].type == ExpressionAction::APPLY_FUNCTION)
+                {
+                    auto & function = expression->getMutableActions()[i+1].function;
+                    if (auto * default_func_base_ptr = dynamic_cast<DefaultFunctionBase *>(function.get()))
+                    {
+                        if (auto * in_func_ptr = dynamic_cast<FunctionIn<false, false, false>*>(default_func_base_ptr->getFunction().get())) {
+                            LOG_INFO(log, "ADD_COLUMN name: {}", action.result_name);
+                            expression->getMutableActions()[i].added_column = ColumnSet::create(1, new_set);
+                            in_func_ptr->setSetPtr(ColumnSet::create(1, new_set));
+                        }
+                    }
+                }
             }
             ++i;
         }
