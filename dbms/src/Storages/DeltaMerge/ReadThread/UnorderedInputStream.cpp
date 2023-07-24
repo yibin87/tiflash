@@ -30,9 +30,9 @@ void UnorderedInputStream::prepareRuntimeFilter()
     std::vector<RuntimeFilterPtr> failed_rf_list;
     for (const RuntimeFilterPtr & rf : runtime_filter_list)
     {
-        //LOG_DEBUG(log, "Waiting rf id: {}", rf->id);
+        LOG_DEBUG(log, "AAAAWaiting rf id: {}", rf->id);
         bool is_ready = rf->await(max_wait_time_ms - sw.elapsedMilliseconds());
-        //LOG_DEBUG(log, "Rf id: {}, is ready: {}", rf->id, is_ready);
+        LOG_DEBUG(log, "AAAARf id: {}, is ready: {}", rf->id, is_ready);
         if (is_ready)
         {
             ready_rf_list.push_back(rf);

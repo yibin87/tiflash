@@ -82,7 +82,7 @@ public:
     const int id;
 
 private:
-    bool updateStatus(RuntimeFilterStatus status_, const std::string & reason = "");
+    bool updateStatus(RuntimeFilterStatus status_, const LoggerPtr & log, const std::string & reason = "");
 
     tipb::Expr source_expr;
     tipb::Expr target_expr;

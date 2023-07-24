@@ -246,6 +246,9 @@ public:
         {
             if (action.type == ExpressionAction::ADD_COLUMN && action.result_type->getTypeId() == TypeIndex::Set)
             {
+    		const auto * column_set = typeid_cast<const ColumnSet *>(&*action.added_column);
+		if (column_set->getData()->getTotalRowCount() > 1)
+			continue;
                 if (expression->getMutableActions()[i+1].type == ExpressionAction::APPLY_FUNCTION)
                 {
                     auto & function = expression->getMutableActions()[i+1].function;
@@ -275,6 +278,9 @@ public:
         {
             if (action.type == ExpressionAction::ADD_COLUMN && action.result_type->getTypeId() == TypeIndex::Set)
             {
+		const auto * column_set = typeid_cast<const ColumnSet *>(&*action.added_column);
+		if (column_set->getData()->getTotalRowCount() > 1)
+			continue;
                 if (expression->getMutableActions()[i+1].type == ExpressionAction::APPLY_FUNCTION)
                 {
                     auto & function = expression->getMutableActions()[i+1].function;

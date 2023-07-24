@@ -95,7 +95,7 @@ void RuntimeFilter::updateValues(const ColumnWithTypeAndName & values, const Log
             if (e.code() == ErrorCodes::SET_SIZE_LIMIT_EXCEEDED)
             {
                 std::string tmp_err_msg = "The rf in values exceed the limit. " + e.message();
-                updateStatus(RuntimeFilterStatus::FAILED, tmp_err_msg);
+                updateStatus(RuntimeFilterStatus::FAILED, log, tmp_err_msg);
                 LOG_WARNING(log, "cancel runtime filter id:{}, reason: {} ", id, tmp_err_msg);
             }
         }
@@ -109,7 +109,7 @@ void RuntimeFilter::updateValues(const ColumnWithTypeAndName & values, const Log
 
 void RuntimeFilter::finalize(const LoggerPtr & log)
 {
-    if (!updateStatus(RuntimeFilterStatus::READY))
+    if (!updateStatus(RuntimeFilterStatus::READY, log))
     {
         return;
     }
@@ -129,7 +129,7 @@ void RuntimeFilter::finalize(const LoggerPtr & log)
 
 void RuntimeFilter::cancel(const LoggerPtr & log, const std::string & reason)
 {
-    updateStatus(RuntimeFilterStatus::FAILED, reason);
+    updateStatus(RuntimeFilterStatus::FAILED, log, reason);
     LOG_INFO(log, "cancel runtime filter id:{}, reason:{}", id, reason);
 }
 
@@ -156,12 +156,13 @@ bool RuntimeFilter::await(int64_t ms_remaining)
             return isReady();
         }
         std::unique_lock<std::mutex> lock(inner_mutex);
-        return inner_cv.wait_for(lock, std::chrono::milliseconds(ms_remaining), [this] { return isReady(); });
+        inner_cv.wait_for(lock, std::chrono::milliseconds(ms_remaining), [this] { return isReady() || isFailed(); });
+	return isReady();
     }
     return true;
 }
 
-bool RuntimeFilter::updateStatus(RuntimeFilterStatus status_, const std::string & reason)
+bool RuntimeFilter::updateStatus(RuntimeFilterStatus status_, const LoggerPtr & log, const std::string & reason)
 {
     //LOG_INFO(log, )
     // check and update status
@@ -177,6 +178,7 @@ bool RuntimeFilter::updateStatus(RuntimeFilterStatus status_, const std::string 
             {
                 if (status == RuntimeFilterStatus::READY)
                 {
+    		    LOG_INFO(log, "Update from READY to failed");
                     return false;
                 }
                 if (failed_reason.empty())
@@ -196,6 +198,7 @@ bool RuntimeFilter::updateStatus(RuntimeFilterStatus status_, const std::string 
         }
         status = status_;
     }
+    LOG_INFO(log, "Notified all after update status");
     inner_cv.notify_all();
     return true;
 }
