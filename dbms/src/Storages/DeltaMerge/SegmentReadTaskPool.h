@@ -280,7 +280,10 @@ public:
             {
 		const auto * column_set = typeid_cast<const ColumnSet *>(&*action.added_column);
 		if (column_set->getData()->getTotalRowCount() > 1)
-			continue;
+        {
+            ++i;
+            continue;
+        }
                 if (expression->getMutableActions()[i+1].type == ExpressionAction::APPLY_FUNCTION)
                 {
                     auto & function = expression->getMutableActions()[i+1].function;
